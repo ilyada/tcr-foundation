@@ -1,0 +1,63 @@
+# TCRFoundation JOINT V-TOKEN (TINY). Same tiny backbone, but: (1) the germline V gene is an ATOMIC token
+# (input = [V-token] SEP CDR3, replacing the AA CDR1/CDR2), (2) ALPHA is DETACHED from the pair (no alpha->pair
+# chain-drop; instead alpha gets its own SimCSE), while BETA keeps its chain-drop-to-pair (beta/paired stay
+# unified). First run: Tanno-only paired, 3 epochs. Paths relative to scripts/.  See daily-changes 2026-07-2x.
+
+# ---- architecture (tiny + per-chain RPE) ----
+hidden_size:             128
+num_hidden_layers:       4
+num_attention_heads:     4
+intermediate_size:       512
+max_position_embeddings: 64
+position_embedding_type: relative_key_query
+type_vocab_size:         2           # 0 = alpha, 1 = beta
+vocab_size:              128         # NEW: AA (20) + specials + 101 V-gene tokens + [V_UNK]  (tcr-vtoken tokenizer)
+
+# ---- NEW: V-token tokenizer + input format ----
+tokenizer_path:  ../models/tokenizers/tcr-vtoken            # custom AA + atomic V-gene tokenizer
+vgene_map_path:  ../models/tokenizers/tcr-vtoken/vgene_map.json   # raw v_gene -> V token (tidytcells-standardised)
+input_format:    vtoken                                     # "[V-token] SEP CDR3" (vs legacy "CDR1 SEP CDR2 SEP CDR3")
+
+# ---- pooler (single, mixed) ----
+pooling: mixed
+dropout: 0.1
+
+# ---- data (Tanno-only first run) ----
+paired_data_path: ../data/processed/pretrain_unique_paired_sequences.tsv
+dataset_sources:  [Tanno_2020]        # subset for the first full run (fast); widen to null (OTS+pan+Tanno) later
+emerson_data_path: ../data/processed/emerson_uniform_train.parquet
+emerson_per_epoch: null               # null = match paired count (~50/50)
+max_len_paired: 96
+max_len_beta:   64
+
+# ---- augmentation (CDR3 censoring + MLM mask; V-token is germline -> never masked) ----
+mlm_prob:          0.15
+censor_apply_prob: 0.5
+censor_res_prob:   0.20
+
+# ---- loss weights ----
+lambda_mlm:          1.0              # MLM on CDR3 (pair both chains + Emerson beta)
+lambda_pair:         1.0             # paired autocontrastive InfoNCE
+lambda_drop_beta:    1.0             # beta -> pair chain-drop (KEEP: beta/paired unification)
+lambda_drop_alpha:   0.0             # NEW: alpha DETACHED from the pair (was folded into lambda_drop)
+lambda_alpha_simcse: 1.0             # NEW: alpha's own SimCSE (two masked alpha views -> close)
+lambda_betaonly:     1.0             # Emerson beta autocontrast
+temperature:         0.05
+
+# ---- optimization ----
+batch_size:   512
+lr:           3.0e-4
+warmup_frac:  0.05
+weight_decay: 0.01
+epochs:       3                      # first full run (Tanno subset)
+seed:         42
+use_amp:      true
+max_grad_norm: 1.0
+num_workers:  0
+
+# ---- output ----
+save_path: ../models/foundation/tcr-foundation-joint-vtoken-tiny
+
+# ---- comet ----
+comet_workspace: ilyada
+comet_project:   tcr_foundation

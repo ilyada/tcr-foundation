@@ -1,0 +1,55 @@
+# TCRFoundation Stage 1: beta-only MLM + InfoNCE on deduplicated Emerson
+# See Knowledge_Base/project_TCRFoundation/context/experiments/stage1_beta_backbone.md
+# All paths are relative to scripts/ (per project convention)
+
+# ---- Backbone architecture: project-light + RPE ----
+hidden_size: 256
+num_hidden_layers: 6
+num_attention_heads: 4
+intermediate_size: 1024
+max_position_embeddings: 64
+position_embedding_type: relative_key_query   # T5-style RPE
+type_vocab_size: 2                            # alpha=0, beta=1
+vocab_size: 26                                # wukevin tokenizer
+hidden_act: gelu
+hidden_dropout_prob: 0.1
+attention_probs_dropout_prob: 0.1
+
+# ---- Pooler beta ----
+pooling: mixed
+dropout: 0.1
+
+# ---- Loss ----
+lambda_mlm: 1.0
+lambda_pair: 1.0
+temperature: 0.05
+
+# ---- Augmentation ----
+mlm_prob: 0.15
+censor_apply_prob: 0.5    # per-view probability of applying SCEPTR censoring
+censor_res_prob: 0.20     # per-residue drop probability in CDR3 when applied
+
+# ---- Optimization ----
+batch_size: 1024
+lr: 5.0e-4
+warmup_frac: 0.05
+weight_decay: 0.01
+epochs: 5
+seed: 42
+max_len: 64
+use_amp: true
+num_workers: 0            # Windows-safe default; override via env for Linux
+
+# ---- Paths (relative to scripts/) ----
+# Train corpus: pre-built uniform-train parquet from build_pretrain_targets.py.
+# Each unique (cdr3aa, v_gene) appears once (universal-donor view), no frequency
+# weighting. Disjoint from emerson_uniform_holdout.parquet by build-time carving.
+data_path: ../data/processed/emerson_uniform_train.parquet
+save_path: ../models/foundation/tcr-foundation-light
+
+# B1 evaluation uses ../data/processed/emerson_uniform_holdout.parquet -- not loaded
+# here; consumed by the B1 PLL evaluation script after training completes.
+
+# ---- Comet ----
+comet_workspace: ilyada
+comet_project: tcr_foundation

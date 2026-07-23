@@ -18,15 +18,16 @@ import sys
 
 __version__ = "0.0.1"
 
-# --- bootstrap: make the existing scripts/ tree importable (repertoire.*, utils.*) without installing ---
-# Layout: <repo>/tcr_foundation/tcr_foundation/__init__.py  ->  parents[2] == <repo>.
+# --- bootstrap: SELF-CONTAINED. Resolve the training/analysis pipeline (utils.*, repertoire.*, foundation.*)
+#     from our OWN VENDORED copy in _vendor/, NOT the repo's scripts/. So the package needs nothing outside this
+#     folder. Layout: <repo>/tcr_foundation/tcr_foundation/__init__.py -> _vendor is a sibling of this inner pkg.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_SCRIPTS = os.path.join(_REPO_ROOT, "scripts")
-if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
-    sys.path.insert(0, _SCRIPTS)
+_VENDOR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "_vendor")
+if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
+    sys.path.insert(0, _VENDOR)
 
 REPO_ROOT = _REPO_ROOT
-SCRIPTS_DIR = _SCRIPTS
+VENDOR_DIR = _VENDOR
 
 # --- lazy public API (PEP 562): submodules load on first access, so `import tcr_foundation` stays LIGHT
 #     (no torch pulled) until you touch a layer that needs it. ---
@@ -34,7 +35,7 @@ _SUBMODULES = {
     "protocols", "schema", "encoders", "featurizers", "descriptors",
     "metrics", "registry", "benchmark", "train", "hf",
 }
-__all__ = sorted(_SUBMODULES) + ["load", "REPO_ROOT", "SCRIPTS_DIR", "__version__"]
+__all__ = sorted(_SUBMODULES) + ["load", "REPO_ROOT", "VENDOR_DIR", "__version__"]
 
 
 def __getattr__(name):

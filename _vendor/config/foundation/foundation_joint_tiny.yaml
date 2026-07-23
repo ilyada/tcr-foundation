@@ -1,0 +1,56 @@
+# TCRFoundation single-stage JOINT (TINY). One model (per-chain BertForMaskedLM + one mixed
+# pooler) trained jointly on paired (OTS+pan+Tanno) + Emerson beta-only -> beta-only and paired
+# share ONE coordinate system; publicness preserved via MLM on Emerson beta. Supersedes the
+# two-stage design. Paths relative to scripts/.
+
+# ---- architecture (tiny + per-chain RPE) ----
+hidden_size:             128
+num_hidden_layers:       4
+num_attention_heads:     4
+intermediate_size:       512
+max_position_embeddings: 64          # per-chain positions <= 47; pair tensor is 96 but positions reset per chain
+position_embedding_type: relative_key_query   # per-chain relative signal lives in the swapped attention
+type_vocab_size:         2           # 0 = alpha, 1 = beta
+vocab_size:              26          # wukevin tokenizer
+
+# ---- pooler (single, mixed) ----
+pooling: mixed
+dropout: 0.1
+
+# ---- data ----
+paired_data_path: ../data/processed/pretrain_unique_paired_sequences.tsv
+dataset_sources:  null               # null = all paired sources (OTS + pan_disease + Tanno ~3.04M)
+emerson_data_path: ../data/processed/emerson_uniform_train.parquet
+emerson_per_epoch: null              # null = match paired count (~50/50); reshuffled fresh each epoch
+max_len_paired: 96
+max_len_beta:   64
+
+# ---- augmentation (SCEPTR CDR3 censoring + MLM mask) ----
+mlm_prob:          0.15
+censor_apply_prob: 0.5               # per-view per-chain prob of applying CDR3 censoring
+censor_res_prob:   0.20              # per-residue drop prob on CDR3 when applied
+
+# ---- loss weights ----
+lambda_mlm:      1.0                 # MLM (pair both chains + Emerson beta = publicness signal)
+lambda_pair:     1.0                 # paired autocontrastive InfoNCE
+lambda_drop:     1.0                 # chain-drop (alpha->pair + beta->pair)
+lambda_betaonly: 1.0                 # Emerson beta autocontrast
+temperature:     0.05
+
+# ---- optimization ----
+batch_size:   512                    # per modality -> ~1024 samples/step, 50/50
+lr:           3.0e-4                 # lowered from 5e-4 for stability with multiple losses
+warmup_frac:  0.05
+weight_decay: 0.01
+epochs:       5
+seed:         42
+use_amp:      true                   # bf16 autodetect (fp16+scaler fallback on pre-Ampere)
+max_grad_norm: 1.0
+num_workers:  0                      # Windows-safe; slurm overrides to 16 PER loader on the cluster
+
+# ---- output ----
+save_path: ../models/foundation/tcr-foundation-joint-tiny
+
+# ---- comet ----
+comet_workspace: ilyada
+comet_project:   tcr_foundation

@@ -1,0 +1,45 @@
+# TCRFoundation Stage 2 (TINY): paired LoRA adapter over the frozen Stage 1 backbone.
+# See Knowledge_Base/project_TCRFoundation/context/experiments/stage2_paired_adapter.md
+# Paired autocontrastive InfoNCE + chain-drop consistency, NO MLM (frozen MLM head preserves
+# the Stage 1 / B1 calibration). Trainable = LoRA(q,v) + pooler_paired + cross-chain dist row
+# + alpha token-type row. Backbone on disk is NOT overwritten. Paths relative to scripts/.
+
+foundation_path: ../models/foundation/tcr-foundation-tiny
+data_path:       ../data/processed/pretrain_unique_paired_sequences.tsv
+dataset_sources: [OTS, pan_disease_TCR]      # ~2.30M paired clonotypes
+save_path:       ../models/foundation/tcr-foundation-tiny
+
+# ---- pooler_paired (fresh, trainable) ----
+pooling: mixed
+dropout: 0.1
+
+# ---- LoRA ----
+lora_rank: 32            # up from 16: adapters now also carry token-level grammar (MLM), not just pairing
+lora_alpha: 64           # keep alpha/r = 2 scaling
+lora_targets: [query, value]
+lora_dropout: 0.0
+
+# ---- loss ----
+lambda_pair: 1.0
+lambda_drop: 1.0
+lambda_mlm:  1.0         # full-sequence MLM through the FROZEN head into the adapters (B1-safe)
+temperature: 0.05
+mlm_prob: 0.15           # MLM mask rate -- now an ACTIVE loss term (on full view v1, both chains)
+
+# ---- SCEPTR residue censoring (CDR3-only, per-chain, view augmentation) ----
+censor_apply_prob: 0.5   # per-view per-chain prob of applying censoring; 0.5 keeps ~50% pristine views for MLM
+censor_res_prob:   0.20  # per-residue drop prob on CDR3 when applied
+
+# ---- optimization ----
+max_len: 96              # paired (pair max 88); per-chain positions keep position_ids <= 47
+batch_size: 1024
+lr: 5.0e-4
+warmup_frac: 0.05
+weight_decay: 0.01       # applied to LoRA + pooler only; extras (masked rows) are no-decay
+epochs: 10
+seed: 42
+use_amp: true
+num_workers: 0
+
+comet_workspace: ilyada
+comet_project: tcr_foundation
