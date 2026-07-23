@@ -17,8 +17,9 @@ from . import REPO_ROOT
 
 # name -> {backend: locator}. FS subpaths are relative to models_root.
 REGISTRY = {
-    "joint-tiny":        {"fs": "foundation/tcr-foundation-joint-tiny"},
-    "joint-vtoken-tiny": {"fs": "foundation/tcr-foundation-joint-vtoken-tiny"},
+    "joint-tiny":        {"fs": "foundation/tcr-foundation-joint-tiny",             # local fast path
+                          "hf": ("argentel/tcr-foundation-joint-tiny", None)},       # public HF fallback (repo, revision)
+    "joint-vtoken-tiny": {"fs": "foundation/tcr-foundation-joint-vtoken-tiny"},      # HF weights not uploaded yet
 }
 
 
@@ -32,16 +33,17 @@ def resolve(name: str) -> str:
     if name not in REGISTRY:
         raise KeyError(f"unknown model '{name}'. Known: {sorted(REGISTRY)}")
     entry = REGISTRY[name]
-    if "fs" in entry:
+    if "fs" in entry:                                          # 1) local fast path (cluster / your machine)
         path = os.path.join(models_root(), entry["fs"])
-        if not os.path.isdir(path):
-            raise FileNotFoundError(f"'{name}' -> {path} not found (set TCR_FOUNDATION_MODELS or add the HF backend)")
-        return path
-    if "hf" in entry:
-        from huggingface_hub import snapshot_download   # lazy; needs the `hf` extra
-        repo, revision = entry["hf"]
-        return snapshot_download(repo_id=repo, revision=revision)
-    raise ValueError(f"registry entry for '{name}' has no known backend: {entry}")
+        if os.path.isdir(path):                               # only if actually present -> else fall through to HF
+            return path
+    if "hf" in entry:                                         # 2) portable: pull from HF into a local cache
+        from huggingface_hub import snapshot_download          # lazy; needs the `hf` extra
+        repo, revision = entry["hf"]                           # (repo_id, revision) from the registry entry
+        cache = os.path.join(os.path.expanduser("~"), ".cache", "tcr_foundation", "models",
+                             str(repo).replace("/", "__"))     # per-repo local dir under ~/.cache
+        return snapshot_download(repo_id=repo, revision=revision, local_dir=cache)  # real files, no symlink cache (Windows-safe)
+    raise FileNotFoundError(f"'{name}' not found locally and no HF backend. entry={entry}")   # 3) nothing worked
 
 
 def load(name: str, **encoder_kwargs):
