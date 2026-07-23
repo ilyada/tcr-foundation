@@ -17,6 +17,12 @@ type_vocab_size:         2
 vocab_size:              128         # AA + specials + 101 V-gene tokens + [V_UNK]  (tcr-vtoken tokenizer)
 
 # ---- V-token tokenizer + input format ----
+# LIBRARY-side tokenizer "подсос": when launched via `python -m tcr_foundation.train`, if `tokenizer_hf` is set
+# the library snapshot_downloads that HF repo (tokenizer files + vgene_map.json) and overrides tokenizer_path /
+# vgene_map_path with the local cache -- so the underlying script still loads from a LOCAL path (its own way).
+# Uncomment once the tokenizer repo exists on HF (a PUBLIC repo needs no token to pull). Until then the local
+# path below is used (rsync the tokenizer to the cluster).
+# tokenizer_hf:  ilyada/tcr-vtoken            # <- set your HF repo id, then this overrides the two paths below
 tokenizer_path:  ../models/tokenizers/tcr-vtoken
 vgene_map_path:  ../models/tokenizers/tcr-vtoken/vgene_map.json
 input_format:    vtoken

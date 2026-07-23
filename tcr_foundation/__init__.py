@@ -27,3 +27,29 @@ if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
 
 REPO_ROOT = _REPO_ROOT
 SCRIPTS_DIR = _SCRIPTS
+
+# --- lazy public API (PEP 562): submodules load on first access, so `import tcr_foundation` stays LIGHT
+#     (no torch pulled) until you touch a layer that needs it. ---
+_SUBMODULES = {
+    "protocols", "schema", "encoders", "featurizers", "descriptors",
+    "metrics", "registry", "benchmark", "train", "hf",
+}
+__all__ = sorted(_SUBMODULES) + ["load", "REPO_ROOT", "SCRIPTS_DIR", "__version__"]
+
+
+def __getattr__(name):
+    """Import a submodule (or the `load` convenience) on first access."""
+    import importlib
+    if name in _SUBMODULES:
+        mod = importlib.import_module(f".{name}", __name__)
+        globals()[name] = mod
+        return mod
+    if name == "load":                                  # tcr_foundation.load("joint-vtoken-tiny")
+        load = importlib.import_module(".registry", __name__).load
+        globals()["load"] = load
+        return load
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(list(globals().keys()) + list(_SUBMODULES) + ["load"])

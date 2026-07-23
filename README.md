@@ -56,6 +56,16 @@ Config: `tcr_foundation/configs/vtoken_full.yaml` (in this folder — deletable 
 overridable with `--epochs` / `EPOCHS=`. Saves to `models/foundation/tcr-foundation-joint-vtoken` (distinct from
 the local 1-epoch `-vtoken-tiny` checkpoint).
 
+### Tokenizer via HF (library-side "подсос")
+The library and the training script fetch the tokenizer independently. The **script** always loads it from a
+LOCAL path (`tokenizer_path` + `vgene_map_path`). The **library** can instead pull it from Hugging Face: set
+`tokenizer_hf: <org>/<repo>` in the config, and `python -m tcr_foundation.train` will `snapshot_download` that repo
+(tokenizer files + `vgene_map.json`) and hand the script a patched temp config pointing at the local cache — so
+the script stays unmodified and HF-agnostic (`hf.resolve_tokenizer` + `train._maybe_resolve_hf_tokenizer`). A local
+dir given to `tokenizer_hf` is passed through as-is. Upload once: `huggingface-cli upload <org>/<repo>
+models/tokenizers/tcr-vtoken` (a PUBLIC repo needs no token to pull); then uncomment `tokenizer_hf` in
+`vtoken_full.yaml` and the "rsync the tokenizer" prereq goes away.
+
 ## Status
 First cut, isolated. Real migration (vendor the utils model-helpers to sever the `encode_repertoires → utils`
 edge, move the core in + delete originals, in-house TCRdist, training primitives, HF weight hosting) is a

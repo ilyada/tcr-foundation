@@ -27,7 +27,7 @@ neural = ["torch", "transformers", "tidytcells"]   # neural clonotype encoder (o
 sceptr = ["sceptr"]                                 # SCEPTR baseline encoder
 tcrdist-ref = ["tcrdist3"]                           # reference TCRdist -- validation oracle only
 hf = ["huggingface_hub"]                             # model registry: HF Hub weight backend (added last)
-train = ["torch", "transformers", "tidytcells", "comet_ml", "pyyaml"]  # launch pretraining via the library
+train = ["torch", "transformers", "tidytcells", "comet_ml", "pyyaml", "huggingface_hub"]  # launch pretraining via the library
 
 [project.scripts]
 # `tcr-foundation-train --config ...` after `pip install -e .` -- launches the joint pretraining (Phase-1 wrapper).
