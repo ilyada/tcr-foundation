@@ -1,0 +1,38 @@
+# tcr_foundation -- installable TCR repertoire library (encoders / descriptors / metrics / registry).
+#
+# ISOLATION NOTE (first cut): this whole directory is self-contained. Deleting `tcr_foundation/` at the
+# repo root reverts the project to its prior state -- nothing outside this folder is modified, and the
+# package is NOT pip-installed (import via sys.path in tests) so there is no stray .pth/.egg-link in any
+# environment. Heavy deps are optional extras; the core stays light.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tcr-foundation"
+version = "0.0.1"
+description = "TCR repertoire library: clonotype encoders, repertoire descriptors, donor-centric metrics, model registry."
+requires-python = ">=3.10"
+# Core stays light (analysis-only): no torch/transformers here -- those live in the [neural] extra.
+dependencies = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "scikit-learn",
+]
+
+[project.optional-dependencies]
+# Heavy / backend-specific deps, opt-in so `pip install tcr-foundation` for pure analysis stays light.
+neural = ["torch", "transformers", "tidytcells"]   # neural clonotype encoder (our foundation model)
+sceptr = ["sceptr"]                                 # SCEPTR baseline encoder
+tcrdist-ref = ["tcrdist3"]                           # reference TCRdist -- validation oracle only
+hf = ["huggingface_hub"]                             # model registry: HF Hub weight backend (added last)
+train = ["torch", "transformers", "tidytcells", "comet_ml", "pyyaml"]  # launch pretraining via the library
+
+[project.scripts]
+# `tcr-foundation-train --config ...` after `pip install -e .` -- launches the joint pretraining (Phase-1 wrapper).
+tcr-foundation-train = "tcr_foundation.train:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["tcr_foundation*"]
