@@ -8,21 +8,25 @@ Layers (protocol-based, swappable):
   metrics      -- donor-centric retrieval AUROC (canonical, one implementation)
   registry     -- name -> (FS path | HF repo) model loader  (HF backend added last)
 
-ISOLATION (first cut): this package is NOT installed. It reuses the existing, unmodified implementations in
-`scripts/` (repertoire.*, utils.*) by putting `scripts/` on sys.path here -- so deleting this whole folder
-reverts everything, and no code outside the folder is touched. The real migration (vendoring those helpers,
-severing the encode_repertoires->utils edge, deleting the originals) is a later, separately-approved step.
+SELF-CONTAINED: the pipeline (repertoire.*, utils.*, foundation.*) is VENDORED into `_vendor/` and put on
+sys.path here -- the package needs nothing outside this folder, so it can be shared and used (including
+training from scratch) without the rest of the repo. It is still not installed by default, and deleting
+this folder reverts the project: nothing outside it was modified. Parked (needs separate approval): moving
+the core in and deleting the originals in scripts/, in-house TCRdist, training primitives, private weights.
 """
 import os
 import sys
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"   # keep in sync with pyproject.toml [project] version
 
 # --- bootstrap: SELF-CONTAINED. Resolve the training/analysis pipeline (utils.*, repertoire.*, foundation.*)
 #     from our OWN VENDORED copy in _vendor/, NOT the repo's scripts/. So the package needs nothing outside this
-#     folder. Layout: <repo>/tcr_foundation/tcr_foundation/__init__.py -> _vendor is a sibling of this inner pkg.
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_VENDOR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "_vendor")
+#     folder. _vendor/ lives INSIDE the package (next to this file) so that a plain `pip install .` ships it in
+#     the wheel; when it sat one level up, wheels silently dropped it and every _vendor-backed submodule
+#     (metrics, featurizers, descriptors, encoders, benchmark, train) raised ModuleNotFoundError: 'repertoire'.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(os.path.dirname(_HERE))   # source checkout only; installed copies use $TCR_FOUNDATION_MODELS
+_VENDOR = os.path.join(_HERE, "_vendor")
 if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
     sys.path.insert(0, _VENDOR)
 
