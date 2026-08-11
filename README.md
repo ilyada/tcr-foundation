@@ -7,7 +7,7 @@ TCR repertoire toolkit: canonical clonotype IO, swappable clonotype **encoders**
 ## Install
 
 ```bash
-pip install "tcr-foundation[neural,hf] @ git+https://github.com/<org>/tcr-foundation"
+pip install "tcr-foundation[neural,hf] @ git+https://github.com/ilyada/tcr-foundation"
 ```
 
 Extras: `neural` (our encoder: torch + transformers + tidytcells) | `sceptr` | `tcrdist-ref` | `hf` (weights
@@ -131,11 +131,12 @@ data sources and batch size stay controllable through the existing flags (and `c
 before torch, as that script requires).
 
 ```bash
-# local smoke: a few steps to prove the entrypoint launches
-PYTHONPATH=<repo>/tcr_foundation python -m tcr_foundation.train \
-    --config <repo>/tcr_foundation/configs/vtoken_full.yaml \
+# local smoke: a few steps to prove the entrypoint launches (run from a checkout, or after pip install)
+python -m tcr_foundation.train --config configs/vtoken_full.yaml \
     --emerson-data-path <a local Emerson parquet> --smoke --no-comet
 ```
+
+Training needs data you supply: the config's paths are relative to the working directory.
 
 ### Cluster run
 
