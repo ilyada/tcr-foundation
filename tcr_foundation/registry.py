@@ -28,19 +28,6 @@ REGISTRY = {
                                    "batch 512, all paired sources + Emerson. Publicness rho^2 0.276; "
                                    "CD4/CD8 mean+cov 0.949, vaccine-delta 0.614 / within-V 0.609."},
 
-    "joint-vtoken":       {"fs": "foundation/tcr-foundation-joint-vtoken",
-                           "hf": ("argentel/tcr-foundation-joint-vtoken", None),       # PRIVATE repo -> needs a token
-                           "private": True,                                            # catalogue hint only
-                           "note": "V-token + alpha-detach, FULLY TRAINED on the cluster (job 1418983, "
-                                   "2026-07-28): 128/4, 5 epochs, batch 512, all sources, real Emerson. "
-                                   "Atomic V token replaces AA CDR1/CDR2; lambda_drop_alpha=0 with alpha "
-                                   "SimCSE. The apples-to-apples counterpart of joint-tiny. HF repo is "
-                                   "PRIVATE: `hf auth login` or export HF_TOKEN before loading."},
-
-    "joint-vtoken-tiny":  {"fs": "foundation/tcr-foundation-joint-vtoken-tiny",
-                           "note": "UNDERTRAINED probe, not for conclusions: same V-token design but 1 epoch, "
-                                   "batch 128, Tanno_2020 only, trained on a local 8GB GPU (2026-07-22)."},
-
     "joint-tiny-fullcov": {"fs": "foundation/tcr-foundation-joint-tiny-fullcov",
                            "note": "CONTROL for the tiny-vs-light confound (2026-06-19): same arch as "
                                    "joint-tiny but retrained on the new full-coverage Emerson rotation. "

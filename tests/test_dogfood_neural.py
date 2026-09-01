@@ -38,7 +38,7 @@ def load_labeled(n):
     return dfs, np.array(labels)
 
 
-enc = registry.load("joint-vtoken-tiny")   # NeuralEncoder, auto-detects vtoken
+enc = registry.load("joint-tiny")
 print(f"NeuralEncoder loaded: input_format={enc.input_format}, dim={enc.dim}, device={enc.device}")
 
 dfs, y = load_labeled(N_FILES)

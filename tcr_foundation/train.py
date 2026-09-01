@@ -50,6 +50,8 @@ def _maybe_resolve_hf_tokenizer(argv):
 
     with open(cfg_path) as f:
         cfg = yaml.safe_load(f) or {}
+    if cfg.get("input_format", "cdr123") != "cdr123":
+        raise ValueError("only the maintained cdr123 training format is supported")
     ref = cfg.get("tokenizer_hf")
     if not ref:
         return argv, None                                   # script's local-path mechanism, untouched

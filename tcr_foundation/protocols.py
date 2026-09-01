@@ -1,11 +1,15 @@
 """
 protocols.py -- the swappable "каркас": typed interfaces every encoder / featurizer / distance implements.
 
-Three levels, kept explicitly separate (this separation is the whole point -- you can swap any one piece):
+Four levels, kept explicitly separate (this separation is the whole point -- you can swap any one piece):
 
+  EventReader         path -> df         one row per RECOMBINATION EVENT  (Adaptive columns, MiXCR refPoints)
   ClonotypeEncoder    df -> Z [N, dim]   per-clonotype embedding vectors  (neural foundation, SCEPTR, ...)
   RepertoireFeaturizer  df -> v [D]      ONE vector per repertoire        (V-usage, k-mer, mean+cov, whitened-SPD)
   PairwiseDistance    df -> D [N, N]     per-clonotype distance matrix    (in-house TCRdist -- not a vector space)
+
+EventReader sits below the other three: it is the only level where a NON-productive rearrangement exists,
+and it is the input to the pre-selection density. The other three are amino-acid levels by construction.
 
 A RepertoireFeaturizer may be model-free (V-usage/k-mer, straight from sequences) or wrap a ClonotypeEncoder
 (mean+cov / whitened-SPD of the encoder's Z). Distances are their own level because TCRdist has no natural
@@ -54,6 +58,24 @@ class RepertoireFeaturizer(Protocol):
 
     def featurize(self, df: pd.DataFrame) -> np.ndarray:
         """Canonical clonotype df -> descriptor vector [dim] (float32, typically L2-normalized)."""
+        ...
+
+
+@runtime_checkable
+class EventReader(Protocol):
+    """One raw per-sample file -> the canonical recombination-EVENT table (see events.py).
+
+    A level BELOW the clonotype: one row per rearrangement, carrying the V(D)J segment identities, the four
+    trimming counts, the two insertion counts, and the frame class. Platforms encode the same event very
+    differently -- Adaptive ships the counts as columns, MiXCR packs the boundaries into `refPoints` -- so
+    the reader is the swappable piece and everything downstream sees one schema.
+
+    The frame class is CARRIED, never filtered: out-of-frame rearrangements are the pre-selection null."""
+
+    platform: str
+
+    def read(self, path: str) -> pd.DataFrame:
+        """Raw per-sample file -> event table with the columns listed in events.EVENT_COLUMNS."""
         ...
 
 

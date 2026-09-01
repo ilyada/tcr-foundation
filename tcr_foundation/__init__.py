@@ -36,8 +36,8 @@ VENDOR_DIR = _VENDOR
 # --- lazy public API (PEP 562): submodules load on first access, so `import tcr_foundation` stays LIGHT
 #     (no torch pulled) until you touch a layer that needs it. ---
 _SUBMODULES = {
-    "protocols", "schema", "encoders", "featurizers", "descriptors",
-    "metrics", "registry", "benchmark", "train", "hf",
+    "protocols", "schema", "events", "encoders", "featurizers", "descriptors",
+    "metrics", "diagnostics", "generator", "registry", "benchmark", "train", "hf",
 }
 __all__ = sorted(_SUBMODULES) + ["load", "REPO_ROOT", "VENDOR_DIR", "__version__"]
 
@@ -49,7 +49,7 @@ def __getattr__(name):
         mod = importlib.import_module(f".{name}", __name__)
         globals()[name] = mod
         return mod
-    if name == "load":                                  # tcr_foundation.load("joint-vtoken-tiny")
+    if name == "load":                                  # tcr_foundation.load("joint-tiny")
         load = importlib.import_module(".registry", __name__).load
         globals()["load"] = load
         return load

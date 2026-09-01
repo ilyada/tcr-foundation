@@ -1,0 +1,55 @@
+# TCRFoundation joint full run through python -m tcr_foundation.train.
+# This is the maintained cdr123 baseline. Paths are relative to scripts/ because the SLURM template changes
+# into that directory. Override epochs and resource-sensitive settings at submission time.
+
+# ---- architecture (tiny + per-chain RPE) ----
+hidden_size:             128
+num_hidden_layers:       4
+num_attention_heads:     4
+intermediate_size:       512
+max_position_embeddings: 64
+position_embedding_type: relative_key_query
+type_vocab_size:         2
+vocab_size:              26          # standard amino-acid tokenizer
+
+# ---- pooler ----
+pooling: mixed
+dropout: 0.1
+
+# ---- data: ALL paired sources + real Emerson uniform-train ----
+paired_data_path: ../data/processed/pretrain_unique_paired_sequences.tsv
+dataset_sources:  null                # null = OTS + pan_disease + Tanno_2020 (all)
+emerson_data_path: ../data/processed/emerson_uniform_train.parquet   # real corpus (cluster)
+emerson_per_epoch: null               # null = match paired count (~50/50)
+max_len_paired: 96
+max_len_beta:   64
+
+# ---- augmentation (CDR3 censoring + MLM) ----
+mlm_prob:          0.15
+censor_apply_prob: 0.5
+censor_res_prob:   0.20
+
+# ---- loss weights ----
+lambda_mlm:          1.0
+lambda_pair:         1.0
+lambda_drop:          1.0
+lambda_betaonly:     1.0
+temperature:         0.05
+
+# ---- optimization ----
+batch_size:   512                     # cluster GPU (locally 512 OOM'd an 8GB card -> the local run used 128)
+lr:           3.0e-4
+warmup_frac:  0.05
+weight_decay: 0.01
+epochs:       3                       # DEFAULT -- override with --epochs N per job
+seed:         42
+use_amp:      true
+max_grad_norm: 1.0
+num_workers:  0                       # portable default; the SLURM launcher sets its Linux worker count explicitly
+
+# ---- output ----
+save_path: ../models/foundation/tcr-foundation-joint-tiny
+
+# ---- comet ----
+comet_workspace: ilyada
+comet_project:   tcr_foundation

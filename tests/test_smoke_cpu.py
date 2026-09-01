@@ -80,11 +80,11 @@ if not (dv_mc.shape[0] == exp_dim and dv_wv.shape[0] == exp_dim and np.isfinite(
 
 
 # ---- registry ----
-assert "joint-vtoken-tiny" in registry.REGISTRY, "vtoken model not registered"
+assert "joint-tiny" in registry.REGISTRY, "joint-tiny model not registered"
 print(f"registry models_root = {registry.models_root()}")
 try:
-    p = registry.resolve("joint-vtoken-tiny")
-    print(f"registry resolve('joint-vtoken-tiny') -> {p}  (exists={os.path.isdir(p)})")
+    p = registry.resolve("joint-tiny")
+    print(f"registry resolve('joint-tiny') -> {p}  (exists={os.path.isdir(p)})")
 except FileNotFoundError as e:
     print(f"registry resolve -> not on disk yet: {e}")   # fine if the checkpoint isn't there
 

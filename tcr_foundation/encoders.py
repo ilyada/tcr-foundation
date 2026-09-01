@@ -1,10 +1,9 @@
 """
 encoders.py -- ClonotypeEncoder implementations (per-clonotype embeddings).
 
-NeuralEncoder : our per-chain joint foundation model. Auto-detects the input grammar from the checkpoint's
-                joint_config.json: "vtoken" ("[V:gene] | CDR3") vs legacy "cdr123" (CDR1|CDR2|CDR3). Mirrors
-                the proven benchmark_ram.make_embedder path exactly (so numbers reproduce), just wrapped
-                behind the ClonotypeEncoder protocol.
+NeuralEncoder : the maintained per-chain cdr123 foundation model. It mirrors the proven
+                benchmark_ram.make_embedder path exactly (so numbers reproduce), just wrapped behind the
+                ClonotypeEncoder protocol.
 SceptrEncoder : SCEPTR b_sceptr beta-only baseline (dim 64).
 
 Heavy deps (torch/transformers/tidytcells/sceptr) are imported LAZILY at construction, so importing this
@@ -12,9 +11,6 @@ module -- or the light core -- costs nothing until you actually build an encoder
 unmodified helpers in scripts/ (utils.benchmark_utils, repertoire.encode_repertoires).
 """
 from __future__ import annotations
-
-import json
-import os
 
 import numpy as np
 
@@ -35,26 +31,14 @@ class NeuralEncoder:
         self.model, self.jcfg = _load_perchain_joint_model(model_path, self.device)
         self.dim = int(self.model.bert.config.hidden_size)
         self.input_format = self.jcfg.get("input_format", "cdr123")
-
-        if self.input_format == "vtoken":
-            self.tokenizer = _get_tokenizer(os.path.join(model_path, "tokenizer"))
-            with open(os.path.join(model_path, self.jcfg.get("vgene_map", "vgene_map.json"))) as f:
-                self.vgene_map = json.load(f)
-        else:
-            self.tokenizer = _get_tokenizer()
-            self.vgene_map = None
+        if self.input_format != "cdr123":
+            raise ValueError(f"unsupported checkpoint input format {self.input_format!r}; use the maintained cdr123 model")
+        self.tokenizer = _get_tokenizer()
 
     def encode(self, df):
-        from repertoire.encode_repertoires import (
-            resolve_cdr12, embed_clonotypes, embed_clonotypes_vtoken)
+        from repertoire.encode_repertoires import resolve_cdr12, embed_clonotypes
         c3 = df[S.CDR3].astype(str).tolist()
-        if self.input_format == "vtoken":
-            vtok = [self.vgene_map.get(str(v), "[V_UNK]") for v in df[S.V_GENE].astype(str)]
-            keep = np.ones(len(df), dtype=bool)
-            Z = embed_clonotypes_vtoken(self.model, self.tokenizer, self.jcfg, vtok, c3,
-                                        self.chain, self.device, self.batch_size)
-            return Z.astype(np.float32), keep
-        # legacy cdr123: need CDR1/2 from tidytcells; drop rows that do not resolve
+        # cdr123 needs CDR1/2 from tidytcells; drop rows that do not resolve.
         c12 = df[S.V_GENE].astype(str).map(resolve_cdr12)
         c1 = [c[0] for c in c12]; c2 = [c[1] for c in c12]
         keep = np.array([a is not None and b is not None for a, b in zip(c1, c2)])

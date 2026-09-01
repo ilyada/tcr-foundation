@@ -33,6 +33,7 @@ sceptr = ["sceptr"]                                 # SCEPTR baseline encoder
 tcrdist-ref = ["tcrdist3"]                           # reference TCRdist -- validation oracle only
 hf = ["huggingface_hub"]                             # model registry: HF Hub weight backend (added last)
 train = ["torch", "transformers", "tidytcells", "comet_ml", "pyyaml", "huggingface_hub"]  # launch pretraining via the library
+test = ["pytest"]
 
 [project.scripts]
 # `tcr-foundation-train --config ...` after `pip install -e .` -- launches the joint pretraining (Phase-1 wrapper).
@@ -50,4 +51,4 @@ namespaces = true
 [tool.setuptools.package-data]
 # The vendored trainer reads its YAML configs from disk -- ship the non-.py files too, or `pip install .`
 # produces a package whose training entrypoint has no configs.
-"tcr_foundation" = ["_vendor/**/*.yaml", "_vendor/**/*.yml", "_vendor/**/*.json", "_vendor/**/*.txt"]
+"tcr_foundation" = ["_vendor/**/*.yaml", "_vendor/**/*.yml", "_vendor/**/*.json", "_vendor/**/*.txt", "configs/*.yaml"]

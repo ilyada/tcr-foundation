@@ -18,7 +18,7 @@ Weights are **not** in the package; they come from the Hub on first use (see [Mo
 
 ```python
 import tcr_foundation as tf
-enc = tf.load("joint-vtoken")     # downloads the checkpoint, returns a ready encoder
+enc = tf.load("joint-tiny")       # downloads the checkpoint, returns a ready encoder
 Z, keep = enc.encode(df)          # df: v_gene + cdr3  ->  Z [N, 128]
 ```
 
@@ -52,7 +52,7 @@ dfs    = [schema.read(p) for p in paths]                      # canonical: v_gen
 labels = np.array([1 if "CD8" in p else 0 for p in paths])
 
 # 2. an encoder: registry name -> local checkpoint, else pulled from HF
-enc = tf.load("joint-vtoken")                                 # == registry.load(...) -> NeuralEncoder
+enc = tf.load("joint-tiny")                                   # == registry.load(...) -> NeuralEncoder
 
 # 3. a descriptor over the encoder's cloud (one vector per donor)
 desc = descriptors.MeanCov(enc).fit(dfs)                      # also: WithinV, Occupancy, WhitenedSPD
@@ -79,7 +79,7 @@ print(B.donor_task(feats, dfs, labels, ref_sizes=(1, 3, 10)))   # {feature: {ref
 | Layer | What it gives you |
 |---|---|
 | `schema` | canonical clonotype table (`v_gene`, `cdr3` + `j_gene`/`count`/`cdr1`/`cdr2`), `ingest`/`read` with column auto-detect, `resolve_germline` (tidytcells V → CDR1/2, lazy) |
-| `encoders` | `ClonotypeEncoder.encode(df) -> (Z [N, dim], keep)`. `NeuralEncoder` (our model; auto-detects `vtoken` vs `cdr123` from the checkpoint), `SceptrEncoder` (dim 64) |
+| `encoders` | `ClonotypeEncoder.encode(df) -> (Z [N, dim], keep)`. `NeuralEncoder` (the maintained cdr123 model), `SceptrEncoder` (dim 64) |
 | `featurizers` | model-free, one vector per donor: `VUsage`, `Kmer(k)` — `fit(dfs)` on a corpus, then `featurize(df)` |
 | `descriptors` | encoder-backed, same interface: `MeanCov` (mean + covariance), `WithinV` (germline-V removed), `Occupancy` (landmark / bag-of-TCR-words), `WhitenedSPD` (mean + logm(cov) in a whitened PCA frame) |
 | `metrics` | `donor_centric_auroc`, `ref_size_sweep_auroc` (one canonical implementation) |
@@ -91,7 +91,7 @@ print(B.donor_task(feats, dfs, labels, ref_sizes=(1, 3, 10)))   # {feature: {ref
 ## Model registry
 
 ```python
-tcr_foundation.load("joint-vtoken")        # backbone + pooler + tokenizer, ready to encode
+tcr_foundation.load("joint-tiny")          # backbone + pooler + tokenizer, ready to encode
 ```
 
 Resolution order per entry: **local filesystem first** (`$TCR_FOUNDATION_MODELS` or `<repo>/models`, the
@@ -100,13 +100,8 @@ which entries are fetchable — with `python -m tcr_foundation.registry`:
 
 | Name | HF | What it is |
 |---|---|---|
-| `joint-vtoken` | `argentel/tcr-foundation-joint-vtoken` (**private**) | The model to use. Atomic V-token + alpha-detach, 5 epochs, batch 512, all paired sources + real Emerson |
-| `joint-tiny` | `argentel/tcr-foundation-joint-tiny` (public) | The cdr123-input baseline it is compared against |
-| `joint-vtoken-tiny`, `joint-tiny-fullcov`, `joint-light`, `stage1-light` | — | History and controls; weights exist only where they were trained, so these report `MISSING` |
-
-**Private weights need credentials.** `joint-vtoken` is in a private repo: run `hf auth login` once (or
-export `HF_TOKEN=hf_...`, which is what a cluster job needs) after being granted access. Without it,
-`load("joint-vtoken")` raises a `PermissionError` naming the repo and the fix rather than a bare HTTP error.
+| `joint-tiny` | `argentel/tcr-foundation-joint-tiny` (public) | Maintained cdr123-input foundation model |
+| `joint-tiny-fullcov`, `joint-light`, `stage1-light` | — | History and controls; weights exist only where they were trained, so these report `MISSING` |
 
 Changing where a model lives means editing one registry entry — call sites do not change. HF downloads go
 to `~/.cache/tcr_foundation/models/<repo>` as **real files** (`local_dir`), not the symlink cache, which is
@@ -124,6 +119,20 @@ python -m tcr_foundation.benchmark --clouds <dir> --encoder ours --model <ckpt> 
 - `--encoder ours | sceptr | none`; model-free features (V-usage, k-mer) run on CPU, encoder-backed ones
   want a GPU
 
+## Non-productive nucleotide generator
+
+The current preparatory nucleotide generator fits separate autoregressive densities: `P_pre` on out-of-frame rearrangements and `P_post` on productive rearrangements. Its fixed-length `log Q` removes the explicit length term from both densities. This nucleotide `P_post` is not the target post-selection density in the IGoR proposal: selection acts on amino-acid receptors, for which the future target is `P_post(a)`.
+
+Build the event corpus with an identity map before any donor-level or paired analysis. The map is a TSV or parquet file with one row per sample and the required columns `sample` and `donor`; its `library` and `timepoint` fields must be supplied for OAR or longitudinal analyses. The corpus preserves these identifiers per event, fits library-depth bins on training donors only, and writes `build_manifest.json` with every source input that was not rebuilt.
+
+```bash
+python -m tcr_foundation.events --input <raw-dir> --out <event-build-dir> --platform adaptive --identity-map <identity.tsv>
+python -m tcr_foundation.germline --events <event-build-dir/events> --out <reference.json>
+python -m tcr_foundation.generator --events <event-build-dir/events> --samples <event-build-dir/samples.parquet> --reference <reference.json> --donor-representations none --train --out <generator-out-dir>
+```
+
+The donor representation specifies what information about a donor enters the generator. The current baseline is `none`, which supplies no donor representation. The model contains a placeholder method for a future IGoR vector, but no donor-ID table or unknown-donor embedding remains. Until the versioned IGoR cache and its conditioner are implemented, any value other than `none` is rejected. Training also rejects missing cohort metadata, an empty holdout cohort, and an empty train/dev/holdout partition. The output CSV records best dev likelihood and held-out-donor likelihood for each class and donor representation.
+
 ## Training the model
 
 `train.py` forwards CLI flags to the vendored `foundation/tcr_foundation_pretrain_joint.py`, so epochs,
@@ -131,32 +140,29 @@ data sources and batch size stay controllable through the existing flags (and `c
 before torch, as that script requires).
 
 ```bash
-# local smoke: a few steps to prove the entrypoint launches (run from a checkout, or after pip install)
-python -m tcr_foundation.train --config configs/vtoken_full.yaml \
-    --emerson-data-path <a local Emerson parquet> --smoke --no-comet
+# local smoke from a checkout: a few steps to prove the entrypoint launches
+python -m tcr_foundation.train --config tcr_foundation/configs/joint_full.yaml --emerson-data-path <a local Emerson parquet> --smoke --no-comet
 ```
 
 Training needs data you supply: the config's paths are relative to the working directory.
 
 ### Cluster run
 
-`slurm/vtoken_full.sh` is a **generic template**, not a site config: the code stays universal and the
+`slurm/joint_full.sh` is a **generic template**, not a site config: the code stays universal and the
 launcher adapts one cluster to it. It carries no host name, home directory or credential — `REPO` comes
 from `SLURM_SUBMIT_DIR` (so submit from the repo root), and everything site-specific is an env override.
 Your cluster's own working launchers belong on the cluster, not in this repository.
 
 ```bash
 cd <repo root>
-sbatch --export=ALL,EPOCHS=5 tcr_foundation/slurm/vtoken_full.sh                  # full run
-sbatch --partition=short --time=00:30:00 \
-       --export=ALL,SMOKE=1,SAVE_PATH=/tmp/vtoken_smoke \
-       tcr_foundation/slurm/vtoken_full.sh                                        # wiring check first
+sbatch --export=ALL,CONDA_ENV=<environment>,EPOCHS=5 tcr_foundation/slurm/joint_full.sh
+sbatch --partition=short --time=00:30:00 --export=ALL,CONDA_ENV=<environment>,SMOKE=1,SAVE_PATH=/tmp/joint_smoke tcr_foundation/slurm/joint_full.sh
 ```
 
 | Override | Meaning |
 |---|---|
 | `REPO`, `WORKDIR` | repo root (default `SLURM_SUBMIT_DIR`) and cwd (default `$REPO/scripts`, so the config's `../data`, `../models` resolve) |
-| `CONDA_ENV` | environment to activate (default `tcr-ml-env`) |
+| `CONDA_ENV` | environment to activate (required) |
 | `CONFIG`, `EPOCHS`, `BATCH_SIZE`, `NUM_WORKERS`, `SAVE_PATH` | forwarded to the trainer |
 | `SMOKE`, `RESUME` | wiring check / resume from `save_path/joint_config.json` |
 | `COMET_PROJECT`, `EXPERIMENT_NAME` | Comet routing |
@@ -169,36 +175,27 @@ with `sbatch` flags at submit time.
 
 `PYTHONPATH` is set by the launcher, so `pip install -e .` is optional.
 
-`configs/vtoken_full.yaml` is the full-run config: all paired sources, the real Emerson corpus, batch 512,
-V-token input format with alpha detached (`lambda_drop_beta/drop_alpha/alpha_simcse = 1.0/0.0/1.0`).
-Checkpoints go to `models/foundation/tcr-foundation-joint-vtoken`.
+`tcr_foundation/configs/joint_full.yaml` is the full-run config and is included in package data: all paired sources, the real Emerson corpus, batch 512,
+and the maintained cdr123 input format. Checkpoints go to `models/foundation/tcr-foundation-joint-tiny`.
 
 **Smoke caveat:** `--smoke` writes a four-step checkpoint into whatever `save_path` is active — always
 pass `SAVE_PATH=` for smokes so it cannot land on a real run's checkpoint.
-
-### Tokenizer
-
-The library and the training script fetch the tokenizer independently. The **script** always loads it
-from a local path; the **library** resolves `tokenizer_hf: <org>/<repo>` from the config via
-`hf.resolve_tokenizer` (snapshot_download into `~/.cache/tcr_foundation/tokenizers/<repo>`, or a local dir
-passed through as-is) and hands the script a patched temp config — so the script itself stays unmodified
-and HF-agnostic.
-
-`configs/vtoken_full.yaml` already points at the public repo `argentel/tcr-vtoken`, which needs no token
-and no rsync: the cluster pulls the tokenizer and `vgene_map.json` on its own.
 
 ## Tests
 
 | File | Needs | What it proves |
 |---|---|---|
-| `tests/test_synthetic.py` | nothing | Generates its own donors, so **anyone can run it**: ingest → V-usage → k-mer → descriptors → metrics → registry. The class signal is planted in V-gene usage, so V-usage must separate the groups (1.000) while the 3-mer arm, whose CDR3s come from the same random process in both classes, must stay at chance (0.500) — a featurizer that finds signal there is broken. `TCR_FOUNDATION_TEST_MODEL=joint-vtoken` adds the encoder arm. |
+| `tests/test_synthetic.py` | nothing | Generates its own donors, so **anyone can run it**: ingest → V-usage → k-mer → descriptors → metrics → registry. The class signal is planted in V-gene usage, so V-usage must separate the groups (1.000) while the 3-mer comparison, whose CDR3s come from the same random process in both classes, must stay at chance (0.500) — a featurizer that finds signal there is broken. `TCR_FOUNDATION_TEST_MODEL=joint-tiny` adds the encoder option. |
 | `tests/test_smoke_cpu.py` | closed cohort data | CPU layers on real clouds reproduce known signal (V-usage CD4/CD8 0.920, k-mer 0.850) |
 | `tests/test_dogfood_neural.py` | closed cohort data + GPU | the package `NeuralEncoder` reproduces `benchmark_ram`'s CD4/CD8 mean+cov |
 | `tests/test_descriptors.py` | closed cohort data | `Occupancy` (dim 32, sums to 1) and `WhitenedSPD` (dim 152) |
 | `tests/test_hf_resolver.py` | network | tokenizer resolution: HF repo id and local dir passthrough |
+| `tests_pytest/` | `pip install .[test]` | automated guards for identity mapping, donor-disjoint split, mandatory holdout, and donor-representation validation |
 
 The last four read `<repo>/data/processed/clouds/cd4cd8_sorted_TRB_seq`, which is not distributable — outside
 the lab, `test_synthetic.py` is the test that runs.
+
+Run the automated guard suite with `pytest` from the outer `tcr_foundation/` directory after installing the `test` extra.
 
 ## Status
 
