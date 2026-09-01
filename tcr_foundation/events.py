@@ -140,8 +140,9 @@ def _load_identity_map(path: str) -> pd.DataFrame:
     """Read a sample-to-donor map with required sample and donor columns.
 
     Library and timepoint are optional for cross-sectional corpora. If absent, the library defaults to the
-    sample and timepoint is empty. A longitudinal or OAR analysis must supply both fields explicitly; this
-    function preserves them in every event row instead of attempting to infer biology from a file name.
+    sample and timepoint is empty. A longitudinal analysis must supply both fields explicitly; OAR is
+    estimated independently for each sample. This function preserves supplied fields instead of attempting
+    to infer biology from a file name.
     """
     identity = pd.read_parquet(path) if str(path).endswith(".parquet") else pd.read_csv(path, sep="\t")
     return _normalise_identity_map(identity, source=path)

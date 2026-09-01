@@ -123,7 +123,7 @@ python -m tcr_foundation.benchmark --clouds <dir> --encoder ours --model <ckpt> 
 
 The current preparatory nucleotide generator fits separate autoregressive densities: `P_pre` on out-of-frame rearrangements and `P_post` on productive rearrangements. Its fixed-length `log Q` removes the explicit length term from both densities. This nucleotide `P_post` is not the target post-selection density in the IGoR proposal: selection acts on amino-acid receptors, for which the future target is `P_post(a)`.
 
-Build the event corpus with an identity map before any donor-level or paired analysis. The map is a TSV or parquet file with one row per sample and the required columns `sample` and `donor`; its `library` and `timepoint` fields must be supplied for OAR or longitudinal analyses. The corpus preserves these identifiers per event, fits library-depth bins on training donors only, and writes `build_manifest.json` with every source input that was not rebuilt.
+Build the event corpus with an identity map before any donor-level or paired analysis. The map is a TSV or parquet file with one row per sample and the required columns `sample` and `donor`; `library` and `timepoint` remain available for longitudinal analyses. The corpus preserves these identifiers per event, fits library-depth bins on training donors only, and writes `build_manifest.json` with every source input that was not rebuilt.
 
 ```bash
 python -m tcr_foundation.events --input <raw-dir> --out <event-build-dir> --platform adaptive --identity-map <identity.tsv>
@@ -132,6 +132,16 @@ python -m tcr_foundation.generator --events <event-build-dir/events> --samples <
 ```
 
 The donor representation specifies what information about a donor enters the generator. The current baseline is `none`, which supplies no donor representation. The model contains a placeholder method for a future IGoR vector, but no donor-ID table or unknown-donor embedding remains. Until the versioned IGoR cache and its conditioner are implemented, any value other than `none` is rejected. Training also rejects missing cohort metadata, an empty holdout cohort, and an empty train/dev/holdout partition. The output CSV records best dev likelihood and held-out-donor likelihood for each class and donor representation.
+
+### OAR correction
+
+`tcr_foundation.oar` accepts one patient-level canonical parquet, Adaptive TSV, or MiXCR TSV. It estimates V- and J-gene over-amplification rates from that patient's non-productive (`out` plus `stop`) events independently for each `sample` and chain, then divides productive template counts by the product of their V/J factors. The corrected productive table retains raw counts and OAR provenance. It never overwrites the input.
+
+```bash
+python -m tcr_foundation.oar --input PATIENT.tsv --out PRODUCTIVE_OAR.parquet --chain TRB
+```
+
+With `--min-unique-clonotypes 15` (the default), a V/J segment represented by fewer than 15 unique non-productive clonotypes, including a segment absent from the calibration set, receives a neutral `OAR = 1`. The output records whether each factor was calibrated, sparse, or absent. This is the documented `min_outframe` behavior of iROAR. For Foundation clouds, use `python -m tcr_foundation.oar_clouds --input PATIENT_DIRECTORY --out NEW_RUN_DIRECTORY`; the default `joint-tiny` model is downloaded once from `argentel/tcr-foundation-joint-tiny` into `NEW_RUN_DIRECTORY/model/`. It writes one cloud per patient and shared `oar_factors.parquet` and `oar_summary.parquet` audit tables.
 
 ## Training the model
 

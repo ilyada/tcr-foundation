@@ -37,7 +37,7 @@ VENDOR_DIR = _VENDOR
 #     (no torch pulled) until you touch a layer that needs it. ---
 _SUBMODULES = {
     "protocols", "schema", "events", "encoders", "featurizers", "descriptors",
-    "metrics", "diagnostics", "generator", "registry", "benchmark", "train", "hf",
+    "metrics", "diagnostics", "generator", "oar", "oar_clouds", "registry", "benchmark", "train", "hf",
 }
 __all__ = sorted(_SUBMODULES) + ["load", "REPO_ROOT", "VENDOR_DIR", "__version__"]
 
