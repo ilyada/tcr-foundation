@@ -405,9 +405,10 @@ def main():
         oar=args.oar, min_unique_clonotypes=args.min_unique_clonotypes,
     )
     output = Path(args.output_dir)
-    summary.to_parquet(output / ("oar_summary.parquet" if args.oar else "cloud_summary.parquet"), index=False)
-    if args.oar and not factors.empty:
-        factors.to_parquet(output / "oar_factors.parquet", index=False)
+    if args.oar:
+        summary.to_parquet(output / "oar_summary.parquet", index=False)
+        if not factors.empty:
+            factors.to_parquet(output / "oar_factors.parquet", index=False)
     manifest = {
         "input": str(args.input_dir), "pattern": args.glob, "model_path": str(args.model), "chain": args.chain,
         "oar": bool(args.oar), "min_unique_clonotypes": args.min_unique_clonotypes if args.oar else None,
