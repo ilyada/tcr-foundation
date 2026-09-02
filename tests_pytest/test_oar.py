@@ -83,6 +83,18 @@ def test_process_patient_combines_out_and_stop_then_returns_model_ready_weights(
     assert corrected.groupby(["sample", "chain"])["w_log"].sum().tolist() == pytest.approx([1.0, 1.0])
 
 
+def test_process_patient_raw_mode_uses_the_same_productive_reader_with_neutral_oar_fields():
+    events = pd.concat((_nonproductive(), _productive()), ignore_index=True)
+    events.loc[events["frame_type"] == "in", "rearrangement"] = ["TGTGCTTCTTCT", "TGTGCTTCTTCC", "TGTGCTTCTTCA", "TGTGCTTCTTCG"]
+    factors, raw = process_patient(events, oar=False)
+    assert factors.empty
+    assert raw["count"].tolist() == pytest.approx(raw["count_raw"].tolist())
+    assert set(raw["oar_v_source"]) == {"not_applied"}
+    assert set(raw["oar_j_source"]) == {"not_applied"}
+    assert set(raw["oar_coefficient"]) == {1.0}
+    assert raw.groupby(["sample", "chain"])["w_log"].sum().tolist() == pytest.approx([1.0, 1.0])
+
+
 def test_process_patient_audits_absent_productive_gene_with_neutral_factor():
     events = pd.concat((_nonproductive(), _productive()), ignore_index=True)
     events.loc[events["frame_type"] == "in", "rearrangement"] = ["TGTGCTTCTTCT", "TGTGCTTCTTCC", "TGTGCTTCTTCA", "TGTGCTTCTTCG"]

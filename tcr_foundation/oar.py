@@ -204,12 +204,14 @@ def _add_absent_productive_factors(factors: pd.DataFrame, corrected: pd.DataFram
     return pd.concat([factors, *additions], ignore_index=True) if additions else factors
 
 
-def process_patient(frame: pd.DataFrame, *, min_unique_clonotypes: int = 15) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return OAR factors and corrected productive clonotypes for one patient file.
+def process_patient(frame: pd.DataFrame, *, min_unique_clonotypes: int = 15, oar: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Prepare one patient's productive clonotypes for a raw or OAR cloud.
 
-    All intermediate quantities remain in memory.  The returned clonotypes are
-    suitable for a Foundation-model cloud builder: ``count`` and ``w_log`` are
-    OAR-corrected, while the raw count and OAR provenance remain explicit.
+    All intermediate quantities remain in memory.  With ``oar=True``, ``out``
+    and ``stop`` events calibrate V/J factors that correct productive template
+    counts.  With ``oar=False``, the same productive-event reader and output
+    schema are used, but the effective count equals the raw template count and
+    all OAR fields are explicitly neutral.
     """
     event_frame = frame.copy()
     if {"v_resolved", "j_resolved"} <= set(event_frame.columns):
@@ -220,15 +222,26 @@ def process_patient(frame: pd.DataFrame, *, min_unique_clonotypes: int = 15) -> 
     unexpected = sorted(set(event_frame["frame_type"]) - allowed)
     if unexpected:
         raise ValueError(f"patient input contains unsupported frame types: {unexpected}")
-    nonproductive = event_frame.loc[event_frame["frame_type"].isin(NONPRODUCTIVE_FRAMES)].copy()
     productive = event_frame.loc[event_frame["frame_type"] == PRODUCTIVE_FRAME].copy()
-    if nonproductive.empty:
-        raise ValueError("patient input has no non-productive out/stop rearrangements")
     if productive.empty:
         raise ValueError("patient input has no productive in-frame rearrangements")
-    factors = estimate_oar(nonproductive, min_unique_clonotypes=min_unique_clonotypes)
-    corrected = correct_productive_weights(productive, factors)
-    factors = _add_absent_productive_factors(factors, corrected)
+    if oar:
+        nonproductive = event_frame.loc[event_frame["frame_type"].isin(NONPRODUCTIVE_FRAMES)].copy()
+        if nonproductive.empty:
+            raise ValueError("patient input has no non-productive out/stop rearrangements")
+        factors = estimate_oar(nonproductive, min_unique_clonotypes=min_unique_clonotypes)
+        corrected = correct_productive_weights(productive, factors)
+        factors = _add_absent_productive_factors(factors, corrected)
+    else:
+        corrected = productive.copy()
+        corrected["templates_raw"] = corrected["templates"].astype(float)
+        corrected["templates_oar"] = corrected["templates_raw"]
+        corrected["oar_v"] = 1.0
+        corrected["oar_j"] = 1.0
+        corrected["oar_coefficient"] = 1.0
+        corrected["oar_v_source"] = "not_applied"
+        corrected["oar_j_source"] = "not_applied"
+        factors = pd.DataFrame(columns=["sample", "chain", "gene_axis", "gene", "n_unique_clonotypes", "n_unique_total", "template_count", "template_total", "expected_frequency", "observed_frequency", "oar_raw", "oar", "oar_source"])
     corrected["cdr3aa"] = _productive_cdr3aa(corrected)
     corrected["count_raw"] = corrected["templates_raw"]
     corrected["count"] = corrected["templates_oar"]

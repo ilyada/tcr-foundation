@@ -141,7 +141,15 @@ The donor representation specifies what information about a donor enters the gen
 python -m tcr_foundation.oar --input PATIENT.tsv --out PRODUCTIVE_OAR.parquet --chain TRB
 ```
 
-With `--min-unique-clonotypes 15` (the default), a V/J segment represented by fewer than 15 unique non-productive clonotypes, including a segment absent from the calibration set, receives a neutral `OAR = 1`. The output records whether each factor was calibrated, sparse, or absent. This is the documented `min_outframe` behavior of iROAR. For Foundation clouds, use `python -m tcr_foundation.oar_clouds --input PATIENT_DIRECTORY --out NEW_RUN_DIRECTORY`; the default `joint-tiny` model is downloaded once from `argentel/tcr-foundation-joint-tiny` into `NEW_RUN_DIRECTORY/model/`. It writes one cloud per patient and shared `oar_factors.parquet` and `oar_summary.parquet` audit tables.
+With `--min-unique-clonotypes 15` (the default), a V/J segment represented by fewer than 15 unique non-productive clonotypes, including a segment absent from the calibration set, receives a neutral `OAR = 1`. The output records whether each factor was calibrated, sparse, or absent. This is the documented `min_outframe` behavior of iROAR.
+
+The maintained repertoire-cloud builder has one raw/OAR path. Its `--oar` tag applies patient-specific correction before log weighting; without it, the same Adaptive, MiXCR, or canonical-Parquet reader, CDR resolution, tokenisation, and encoder use raw template counts. The historical VDJtools reader remains available for raw-only inputs, which cannot support OAR because they lack non-productive frame calls. Every cloud records the Boolean `oar` tag, raw and effective counts, normalized `w_log`, and OAR provenance. For an OAR run with a local checkpoint:
+
+```bash
+python -m tcr_foundation._vendor.repertoire.encode_repertoires --input-dir PATIENT_DIRECTORY --glob 'P*.tsv' --chain beta --model CHECKPOINT_DIRECTORY --output-dir OAR_CLOUD_DIRECTORY --oar
+```
+
+`python -m tcr_foundation.oar_clouds --input PATIENT_DIRECTORY --out NEW_RUN_DIRECTORY` remains a convenience wrapper: it downloads `argentel/tcr-foundation-joint-tiny` once into `NEW_RUN_DIRECTORY/model/`, calls the same `--oar` builder, and writes one cloud per patient plus shared `oar_factors.parquet` and `oar_summary.parquet` audit tables.
 
 ## Training the model
 

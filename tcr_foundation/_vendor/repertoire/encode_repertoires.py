@@ -26,19 +26,24 @@ Usage (from scripts/):
 """
 
 import argparse
-import glob
+import json
 import os
 import re
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+# comet_ml must precede torch: importing torch first disables its auto-logging hooks.
+try:
+    import comet_ml  # noqa: F401
+except ImportError:
+    pass
 import torch
 import tidytcells.tr as tt_tr
 
 # Make `utils` importable when launched from anywhere.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/ root for `from utils`
 from utils.benchmark_utils import (  # noqa: E402  (path set above)
     _get_tokenizer,
@@ -179,9 +184,78 @@ def embed_clonotypes_vtoken(model, tokenizer, jcfg, vtokens, cdr3, chain, device
     return _embed_texts(model, tokenizer, texts, type_id, max_len, device, batch_size)
 
 
+def _embed_prepared_clonotypes(df, model, tokenizer, jcfg, chain, device, batch_size, *, oar: bool):
+    """Embed a canonical productive table after raw or OAR weight preparation."""
+    df = df.copy()
+    required = {"sample", "chain", "cdr3aa", "v_gene", "j_gene", "count_raw", "count"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"prepared clonotypes are missing required columns: {missing}")
+    if set(df["chain"].astype(str)) != ({"TRB"} if chain == "beta" else {"TRA"}):
+        raise ValueError(f"prepared clonotypes do not match requested {chain} chain")
+
+    c12 = df["v_gene"].astype(str).map(resolve_cdr12)
+    df["cdr1"] = [c[0] for c in c12]
+    df["cdr2"] = [c[1] for c in c12]
+    df = df[df["cdr1"].notna() & df["cdr2"].notna()].reset_index(drop=True)
+    if df.empty:
+        return None, 0
+
+    embeddings = embed_clonotypes(
+        model, tokenizer, jcfg,
+        df["cdr1"].tolist(), df["cdr2"].tolist(), df["cdr3aa"].tolist(),
+        chain, device, batch_size,
+    )
+    log_counts = np.log1p(pd.to_numeric(df["count"], errors="raise").to_numpy(dtype=float))
+    if not np.isfinite(log_counts).all() or log_counts.sum() <= 0:
+        raise ValueError("cloud weights must be finite and positive after log1p")
+    df["w_log"] = log_counts / log_counts.sum()
+    df["oar"] = bool(oar)
+    df["freq"] = df["count_raw"] / df.groupby(["sample", "chain"], observed=True)["count_raw"].transform("sum")
+    for column, value in {
+        "oar_v": 1.0, "oar_j": 1.0, "oar_coefficient": 1.0,
+        "oar_v_source": "not_applied", "oar_j_source": "not_applied",
+    }.items():
+        if column not in df:
+            df[column] = value
+    columns = [
+        "sample", "chain", "cdr3aa", "v_gene", "j_gene", "count_raw", "count", "freq", "w_log", "oar",
+        "oar_v", "oar_v_source", "oar_j", "oar_j_source", "oar_coefficient",
+    ]
+    cloud = pd.concat((df[columns], pd.DataFrame(embeddings, columns=[f"e{i}" for i in range(embeddings.shape[1])])), axis=1)
+    return cloud, len(cloud)
+
+
 def process_file(path, model, tokenizer, jcfg, chain, device, batch_size):
-    """Read one clonotype file -> productive filter -> tidytcells CDR1/2 -> embed -> DataFrame.
-    Returns (df_or_None, (n_raw, n_productive, n_resolved))."""
+    """Build a raw-weight cloud from one legacy clonotype file.
+
+    Returns ``(cloud_or_none, summary, factors)``.  ``factors`` is ``None`` in
+    raw mode, which keeps the caller's audit interface identical to OAR mode.
+    """
+    from tcr_foundation.oar import process_patient, read_patient
+
+    chain_label = "TRB" if chain == "beta" else "TRA"
+    try:
+        events = read_patient(path, chain=chain_label)
+    except ValueError as exc:
+        # VDJtools-style files lack frame_type and remain supported through the
+        # historical reader below.  Adaptive, MiXCR, and canonical parquet
+        # inputs take the same raw preparation path as OAR mode.
+        if "unsupported TSV" not in str(exc):
+            raise
+    else:
+        events = events.loc[events["chain"].astype(str) == chain_label].copy()
+        if events.empty:
+            raise EmptyRepertoire(f"no {chain_label} events")
+        _, prepared = process_patient(events, oar=False)
+        out, n_res = _embed_prepared_clonotypes(prepared, model, tokenizer, jcfg, chain, device, batch_size, oar=False)
+        return out, {
+            "n_event_rows": len(events),
+            "n_nonproductive_rows": int(events["frame_type"].astype(str).isin(("out", "stop")).sum()),
+            "n_productive_raw": len(prepared),
+            "n_productive_embedded": n_res,
+        }, None
+
     try:
         df = pd.read_csv(path, sep="\t", low_memory=False)
     except pd.errors.EmptyDataError:
@@ -194,107 +268,140 @@ def process_file(path, model, tokenizer, jcfg, chain, device, batch_size):
     df = df[df["cdr3aa"].map(is_productive)].copy()
     n_prod = len(df)
 
-    c12 = df["v"].astype(str).map(resolve_cdr12)
-    df["cdr1"] = [c[0] for c in c12]
-    df["cdr2"] = [c[1] for c in c12]
-    df = df[df["cdr1"].notna() & df["cdr2"].notna()].reset_index(drop=True)
-    n_res = len(df)
-    if n_res == 0:
-        return None, (n_raw, n_prod, n_res)
-
-    Z = embed_clonotypes(
-        model, tokenizer, jcfg,
-        df["cdr1"].tolist(), df["cdr2"].tolist(), df["cdr3aa"].tolist(),
-        chain, device, batch_size,
-    )
-
-    # log weighting: w_log = log(1+count) / sum(log(1+count))
-    w = np.log1p(df["count"].astype(float).values)
-    w_log = w / w.sum() if w.sum() > 0 else np.full(len(w), 1.0 / len(w))
-
-    H = Z.shape[1]
-    out = pd.DataFrame({
+    prepared = pd.DataFrame({
+        "sample": Path(path).stem,
+        "chain": "TRB" if chain == "beta" else "TRA",
         "cdr3aa": df["cdr3aa"].values,
         "v_gene": df["v"].values,
         "j_gene": df["j"].values,
-        "count":  df["count"].values,
-        "freq":   df["freq"].values,
-        "w_log":  w_log,
+        "count_raw": pd.to_numeric(df["count"], errors="raise").values,
+        "count": pd.to_numeric(df["count"], errors="raise").values,
     })
-    emb = pd.DataFrame(Z, columns=[f"e{i}" for i in range(H)])
-    return pd.concat([out, emb], axis=1), (n_raw, n_prod, n_res)
+    out, n_res = _embed_prepared_clonotypes(prepared, model, tokenizer, jcfg, chain, device, batch_size, oar=False)
+    return out, {"n_event_rows": n_raw, "n_productive_raw": n_prod, "n_productive_embedded": n_res}, None
+
+
+def process_oar_file(path, model, tokenizer, jcfg, chain, device, batch_size, *, min_unique_clonotypes=15):
+    """Build an OAR-corrected cloud through the same CDR lookup and embedder as raw mode."""
+    from tcr_foundation.oar import process_patient, read_patient
+
+    source = Path(path)
+    chain_label = "TRB" if chain == "beta" else "TRA"
+    events = read_patient(source, chain=chain_label)
+    events = events.loc[events["chain"].astype(str) == chain_label].copy()
+    if events.empty:
+        raise ValueError(f"{source.name}: no {chain_label} events")
+    factors, productive = process_patient(events, min_unique_clonotypes=min_unique_clonotypes)
+    out, n_embedded = _embed_prepared_clonotypes(productive, model, tokenizer, jcfg, chain, device, batch_size, oar=True)
+    return out, {
+        "n_event_rows": len(events),
+        "n_nonproductive_rows": int(events["frame_type"].astype(str).isin(("out", "stop")).sum()),
+        "n_oar_factors": len(factors),
+        "n_oar_calibrated": int((factors["oar_source"] == "patient_nonproductive").sum()),
+        "n_oar_neutral_insufficient": int((factors["oar_source"] == "insufficient_nonproductive").sum()),
+        "n_oar_neutral_absent": int((factors["oar_source"] == "absent_nonproductive").sum()),
+        "n_productive_corrected": len(productive),
+        "n_productive_embedded": n_embedded,
+    }, factors
+
+
+def build_clouds(input_path, *, model_path, output_dir, chain="beta", pattern=None, device=None, batch_size=512,
+                 limit=None, overwrite=False, oar=False, min_unique_clonotypes=15):
+    """Build raw or OAR-weighted clouds through one shared model instance.
+
+    The raw and OAR branches converge before CDR resolution, tokenisation, and
+    embedding.  Thus `oar` is the sole intentional difference between the two
+    cloud types.  The returned factor table is empty in raw mode.
+    """
+    source = Path(input_path)
+    token = {"beta": "TRB", "alpha": "TRA"}[chain]
+    selected_pattern = pattern or f"*{token}*.txt"
+    files = [source] if source.is_file() else sorted(source.glob(selected_pattern))
+    if limit is not None:
+        files = files[:limit]
+    if not files:
+        raise FileNotFoundError(f"no files matching {selected_pattern!r} at {source}")
+
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    target = torch.device(device) if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Found {len(files)} files matching {selected_pattern} | chain={chain} | oar={oar} | device={target}")
+    if target.type == "cpu":
+        print("WARNING: running on CPU — embedding will be slow.")
+    tokenizer = _get_tokenizer()
+    model, jcfg = _load_perchain_joint_model(model_path, target)
+
+    summaries, factor_frames = [], []
+    for index, path in enumerate(files, 1):
+        stem = path.stem
+        out_path = output / f"{stem}.parquet"
+        if out_path.exists() and not overwrite:
+            print(f"[{index}/{len(files)}] skip (exists) {stem}")
+            summaries.append({"source": path.name, "status": "skipped", "oar": bool(oar)})
+            continue
+        try:
+            if oar:
+                cloud, summary, factors = process_oar_file(
+                    path, model, tokenizer, jcfg, chain, target, batch_size,
+                    min_unique_clonotypes=min_unique_clonotypes,
+                )
+            else:
+                cloud, summary, factors = process_file(path, model, tokenizer, jcfg, chain, target, batch_size)
+        except EmptyRepertoire as exc:
+            summaries.append({"source": path.name, "status": "empty", "oar": bool(oar), "error": str(exc)})
+            print(f"[{index}/{len(files)}] {path.name}: EMPTY ({exc})")
+            continue
+        except Exception as exc:
+            summaries.append({"source": path.name, "status": "error", "oar": bool(oar), "error": f"{type(exc).__name__}: {exc}"})
+            print(f"[{index}/{len(files)}] {path.name}: ERROR — {type(exc).__name__}: {exc}")
+            continue
+        if cloud is None:
+            summaries.append({"source": path.name, "status": "empty", "oar": bool(oar), **summary})
+            print(f"[{index}/{len(files)}] {path.name}: 0 V-resolved clonotypes")
+            continue
+        cloud.to_parquet(out_path, index=False)
+        summaries.append({"source": path.name, "sample": str(cloud["sample"].iloc[0]), "status": "ok", "oar": bool(oar), **summary})
+        if factors is not None:
+            factor_frames.append(factors.assign(source=path.name))
+        print(f"[{index}/{len(files)}] {path.name}: {summary['n_productive_embedded']} {chain} clonotypes")
+
+    summary_frame = pd.DataFrame(summaries)
+    factors = pd.concat(factor_frames, ignore_index=True) if factor_frames else pd.DataFrame()
+    return summary_frame, factors
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--input-dir", required=True, help="folder of clonotype .txt files")
+    ap.add_argument("--input-dir", required=True, help="one clonotype file or a folder of clonotype files")
     ap.add_argument("--chain", choices=["alpha", "beta"], required=True,
-                    help="chain to embed: sets token_type AND selects files (beta -> *TRB*.txt, alpha -> *TRA*.txt)")
-    ap.add_argument("--glob", default=None,
-                    help="override the filename glob (default derived from --chain: *TRB*.txt / *TRA*.txt)")
-    ap.add_argument("--model", required=True, help="frozen foundation dir (backbone + poolers/joint.pt + joint_config.json)")
-    ap.add_argument("--output-dir", required=True, help="where per-donor parquets are written")
+                    help="chain to embed: sets token_type and the default filename pattern")
+    ap.add_argument("--glob", default=None, help="override the filename glob")
+    ap.add_argument("--model", required=True, help="frozen foundation checkpoint directory")
+    ap.add_argument("--output-dir", required=True, help="where per-donor cloud parquets are written")
     ap.add_argument("--batch-size", type=int, default=512)
     ap.add_argument("--device", default=None, help="cuda / cpu (default: cuda if available)")
     ap.add_argument("--limit", type=int, default=None, help="only the first N files (debug)")
     ap.add_argument("--overwrite", action="store_true", help="re-encode even if the output parquet exists")
+    ap.add_argument("--oar", action="store_true", help="estimate patient-specific OARs from out/stop events before weighting productive clonotypes")
+    ap.add_argument("--min-unique-clonotypes", type=int, default=15, help="minimum non-productive clonotypes per V/J segment in OAR mode")
     args = ap.parse_args()
 
-    chain = args.chain
-    token = {"beta": "TRB", "alpha": "TRA"}[chain]
-    pattern = args.glob or f"*{token}*.txt"
-
-    device = torch.device(args.device) if args.device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    files = sorted(glob.glob(os.path.join(args.input_dir, pattern)))
-    if args.limit:
-        files = files[:args.limit]
-    print(f"Found {len(files)} files matching {pattern}  |  chain={chain}  |  device={device}")
-    if device.type == "cpu":
-        print("WARNING: running on CPU — embedding will be slow.")
-
-    tokenizer = _get_tokenizer()
-    model, jcfg = _load_perchain_joint_model(args.model, device)
-
-    tot_raw = tot_prod = tot_res = 0
-    empty, failed = [], []
-    for k, path in enumerate(files, 1):
-        stem = os.path.basename(path)[:-4]                      # strip .txt; stem == metadata file.name minus .txt
-        out_path = os.path.join(args.output_dir, stem + ".parquet")
-        if os.path.exists(out_path) and not args.overwrite:
-            print(f"[{k}/{len(files)}] skip (exists) {stem}")
-            continue
-        try:
-            out, (n_raw, n_prod, n_res) = process_file(path, model, tokenizer, jcfg, chain, device, args.batch_size)
-        except EmptyRepertoire as ex:                           # no data -> not an error, just empty
-            print(f"[{k}/{len(files)}] {stem}: EMPTY ({ex}) — skipped")
-            empty.append(stem)
-            continue
-        except Exception as ex:                                 # a genuinely malformed file must not kill the run
-            print(f"[{k}/{len(files)}] {stem}: PARSE ERROR — {ex}")
-            failed.append(stem)
-            continue
-        tot_raw += n_raw
-        tot_prod += n_prod
-        tot_res += n_res
-        if out is None:
-            print(f"[{k}/{len(files)}] {stem}: 0 usable clonotypes — skipped")
-            continue
-        out.to_parquet(out_path, index=False)
-        print(f"[{k}/{len(files)}] {stem}: {n_raw} -> productive {n_prod} -> V-resolved {n_res}")
-
-    n_unres = sum(1 for v in _CDR_CACHE.values() if v[0] is None)
-    print(f"\nDONE -> {args.output_dir}")
-    print(f"  clonotypes: {tot_raw} total | productive {tot_prod} ({100*tot_prod/max(tot_raw,1):.1f}%) "
-          f"| V-resolved {tot_res} ({100*tot_res/max(tot_raw,1):.1f}%)")
-    print(f"  unique V genes seen: {len(_CDR_CACHE)} (unresolved by tidytcells: {n_unres})")
-    if n_unres:
-        print("  unresolved V genes:", sorted(v for v in _CDR_CACHE if _CDR_CACHE[v][0] is None))
-    if empty:
-        print(f"  EMPTY (no clonotypes): {len(empty)} files")
-    if failed:
-        print(f"  PARSE ERRORS: {len(failed)} files: {failed[:20]}{' ...' if len(failed) > 20 else ''}")
+    summary, factors = build_clouds(
+        args.input_dir, model_path=args.model, output_dir=args.output_dir, chain=args.chain, pattern=args.glob,
+        device=args.device, batch_size=args.batch_size, limit=args.limit, overwrite=args.overwrite,
+        oar=args.oar, min_unique_clonotypes=args.min_unique_clonotypes,
+    )
+    output = Path(args.output_dir)
+    summary.to_parquet(output / ("oar_summary.parquet" if args.oar else "cloud_summary.parquet"), index=False)
+    if args.oar and not factors.empty:
+        factors.to_parquet(output / "oar_factors.parquet", index=False)
+    manifest = {
+        "input": str(args.input_dir), "pattern": args.glob, "model_path": str(args.model), "chain": args.chain,
+        "oar": bool(args.oar), "min_unique_clonotypes": args.min_unique_clonotypes if args.oar else None,
+        "batch_size": args.batch_size, "n_inputs": len(summary), "n_success": int((summary["status"] == "ok").sum()),
+    }
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"completed {manifest['n_success']}/{len(summary)} files")
 
 
 if __name__ == "__main__":
