@@ -148,6 +148,14 @@ def resolve_cdr12(v: str):
     return out
 
 
+def standardise_v_gene(v: str) -> str | None:
+    """Map an input V call to a tidytcells symbol without changing cloud provenance."""
+    try:
+        return tt_tr.standardise(symbol=str(v).split("*")[0], species="homosapiens")
+    except Exception:
+        return None
+
+
 @torch.no_grad()
 def _embed_texts(model, tokenizer, texts, type_id, max_len, device, batch_size):
     """Tokenise single-chain `texts` -> per-chain position_ids + token_type -> mixed-pool z. Shared
@@ -194,7 +202,10 @@ def _embed_prepared_clonotypes(df, model, tokenizer, jcfg, chain, device, batch_
     if set(df["chain"].astype(str)) != ({"TRB"} if chain == "beta" else {"TRA"}):
         raise ValueError(f"prepared clonotypes do not match requested {chain} chain")
 
-    c12 = df["v_gene"].astype(str).map(resolve_cdr12)
+    # Preserve the reported V call in the cloud, but use the same canonical
+    # symbol for germline lookup in raw and OAR branches.
+    df["v_gene_lookup"] = df["v_gene"].astype(str).map(standardise_v_gene)
+    c12 = df["v_gene_lookup"].map(resolve_cdr12)
     df["cdr1"] = [c[0] for c in c12]
     df["cdr2"] = [c[1] for c in c12]
     df = df[df["cdr1"].notna() & df["cdr2"].notna()].reset_index(drop=True)
