@@ -204,8 +204,10 @@ def _embed_prepared_clonotypes(df, model, tokenizer, jcfg, chain, device, batch_
 
     # Preserve the reported V call in the cloud, but use the same canonical
     # symbol for germline lookup in raw and OAR branches.
-    df["v_gene_lookup"] = df["v_gene"].astype(str).map(standardise_v_gene)
-    c12 = df["v_gene_lookup"].map(resolve_cdr12)
+    raw_v_genes = df["v_gene"].astype(str)
+    lookup = {gene: standardise_v_gene(gene) for gene in raw_v_genes.unique()}
+    df["v_gene_lookup"] = raw_v_genes.map(lookup)
+    c12 = df["v_gene_lookup"].map(lambda gene: resolve_cdr12(gene) if gene is not None else (None, None))
     df["cdr1"] = [c[0] for c in c12]
     df["cdr2"] = [c[1] for c in c12]
     df = df[df["cdr1"].notna() & df["cdr2"].notna()].reset_index(drop=True)
