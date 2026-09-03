@@ -26,7 +26,7 @@ def test_build_reference_counts_selected_identity_publicness(tmp_path: Path):
     _cloud(clouds / "P00003.parquet", [("TRB", "TRBV1", "AAA", 1.0, 0.0), ("TRB", "TRBV4", "DDD", 0.0, -1.0)])
 
     out = tmp_path / "reference"
-    manifest = build_reference(clouds, out, clusters=2, hash_modulus=1, per_stratum=10, seed=7, minibatch_size=2)
+    manifest = build_reference(clouds, out, clusters=2, hash_modulus=1, per_stratum=10, seed=7, minibatch_size=2, limit=3)
 
     audit = pd.read_parquet(out / "reference_candidates.parquet")
     aaa = audit.loc[(audit["v_gene"] == "TRBV1") & (audit["cdr3aa"] == "AAA")].iloc[0]

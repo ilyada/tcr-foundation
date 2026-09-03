@@ -69,6 +69,7 @@ def build_reference(
     seed: int = 0,
     minibatch_size: int = 10_000,
     embedding_prefix: str = "e",
+    limit: int | None = None,
 ) -> dict[str, object]:
     """Stream clouds, build a publicness-balanced reference pool, and fit a k-means codebook."""
     if clusters < 2:
@@ -82,6 +83,10 @@ def build_reference(
     files = sorted(source.glob("P*.parquet"))
     if not files:
         raise FileNotFoundError(f"no P*.parquet files under {source}")
+    if limit is not None:
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        files = files[:limit]
     output = Path(out_dir)
     if output.exists():
         raise FileExistsError(f"output directory already exists: {output}")
@@ -195,6 +200,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--minibatch-size", type=int, default=10_000)
     parser.add_argument("--embedding-prefix", default="e")
+    parser.add_argument("--limit", type=int, default=None, help="process only the first N clouds; intended for smoke tests")
     args = parser.parse_args()
     build_reference(
         args.clouds_dir,
@@ -206,6 +212,7 @@ def main() -> None:
         seed=args.seed,
         minibatch_size=args.minibatch_size,
         embedding_prefix=args.embedding_prefix,
+        limit=args.limit,
     )
 
 
