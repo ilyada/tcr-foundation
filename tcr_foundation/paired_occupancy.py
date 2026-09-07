@@ -98,8 +98,8 @@ def _align_oar_to_raw(raw: pd.DataFrame, oar: pd.DataFrame, *, raw_path: Path, o
     # by a deterministic occurrence counter within their biological identity; repeated rows have
     # identical sequence-derived embeddings, while their independent abundance still enters w_log.
     occurrence = "_paired_occurrence"
-    raw_keyed = raw.assign(**{occurrence: raw.groupby(list(_IDENTITY_COLUMNS), sort=False).cumcount()})
-    oar_keyed = oar.assign(**{occurrence: oar.groupby(list(_IDENTITY_COLUMNS), sort=False).cumcount()})
+    raw_keyed = raw.assign(**{occurrence: raw.groupby(list(_IDENTITY_COLUMNS), sort=False, observed=True).cumcount()})
+    oar_keyed = oar.assign(**{occurrence: oar.groupby(list(_IDENTITY_COLUMNS), sort=False, observed=True).cumcount()})
     paired_columns = [*_IDENTITY_COLUMNS, occurrence]
     raw_index = pd.MultiIndex.from_frame(raw_keyed.loc[:, paired_columns])
     oar_index = pd.MultiIndex.from_frame(oar_keyed.loc[:, paired_columns])
