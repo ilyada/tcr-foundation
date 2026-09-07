@@ -94,13 +94,18 @@ def _align_oar_to_raw(raw: pd.DataFrame, oar: pd.DataFrame, *, raw_path: Path, o
         missing = sorted(set(_IDENTITY_COLUMNS) - set(frame.columns))
         if missing:
             raise ValueError(f"{path}: missing identity columns {missing}")
-        if frame.duplicated(list(_IDENTITY_COLUMNS)).any():
-            raise ValueError(f"{path}: duplicate cloud identities prevent unambiguous raw/OAR alignment")
-    raw_index = pd.MultiIndex.from_frame(raw.loc[:, _IDENTITY_COLUMNS])
-    oar_index = pd.MultiIndex.from_frame(oar.loc[:, _IDENTITY_COLUMNS])
+    # The cloud builder preserves rows rather than collapsing repeated input clonotypes.  Pair them
+    # by a deterministic occurrence counter within their biological identity; repeated rows have
+    # identical sequence-derived embeddings, while their independent abundance still enters w_log.
+    occurrence = "_paired_occurrence"
+    raw_keyed = raw.assign(**{occurrence: raw.groupby(list(_IDENTITY_COLUMNS), sort=False).cumcount()})
+    oar_keyed = oar.assign(**{occurrence: oar.groupby(list(_IDENTITY_COLUMNS), sort=False).cumcount()})
+    paired_columns = [*_IDENTITY_COLUMNS, occurrence]
+    raw_index = pd.MultiIndex.from_frame(raw_keyed.loc[:, paired_columns])
+    oar_index = pd.MultiIndex.from_frame(oar_keyed.loc[:, paired_columns])
     if len(raw_index) != len(oar_index) or not raw_index.isin(oar_index).all() or not oar_index.isin(raw_index).all():
         raise ValueError(f"raw/OAR cloud identities differ: {raw_path.name} vs {oar_path.name}")
-    return oar.set_index(list(_IDENTITY_COLUMNS)).loc[raw_index].reset_index()
+    return oar_keyed.set_index(paired_columns).loc[raw_index].reset_index().drop(columns=occurrence)
 
 
 def _soft_assignments(embeddings: np.ndarray, prototypes: np.ndarray, *, temperature: float, chunk_size: int) -> np.ndarray:

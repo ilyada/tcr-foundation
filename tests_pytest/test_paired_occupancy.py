@@ -60,3 +60,19 @@ def test_paired_occupancy_rejects_embedding_mismatch(tmp_path: Path):
 
     with pytest.raises(ValueError, match="embedding mismatch"):
         build_paired_occupancies(raw, oar, [codebooks / "k2"], tmp_path / "out")
+
+
+def test_paired_occupancy_retains_repeated_clonotype_rows(tmp_path: Path):
+    raw, oar, codebooks = tmp_path / "raw", tmp_path / "oar", tmp_path / "codebooks"
+    raw.mkdir(); oar.mkdir(); codebooks.mkdir()
+    base = {
+        "sample": ["P00001", "P00001"], "chain": ["TRB", "TRB"], "v_gene": ["TRBV1", "TRBV1"],
+        "j_gene": ["TRBJ1-1", "TRBJ1-1"], "cdr3aa": ["CASSA", "CASSA"], "e0": [1.0, 1.0], "e1": [0.0, 0.0],
+    }
+    pd.DataFrame({**base, "w_log": [0.6, 0.4]}).to_parquet(raw / "P00001.parquet", index=False)
+    pd.DataFrame({**base, "w_log": [0.3, 0.7]}).to_parquet(oar / "P00001.parquet", index=False)
+    _codebook(codebooks / "k2")
+
+    build_paired_occupancies(raw, oar, [codebooks / "k2"], tmp_path / "out")
+    descriptor = pd.read_parquet(tmp_path / "out" / "occupancy_k2_raw.parquet").iloc[0]
+    assert int(descriptor["n_clonotypes"]) == 2
