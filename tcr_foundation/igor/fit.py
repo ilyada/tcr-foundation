@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .events import FRAME_OUT, FRAME_STOP
+from ..recombination.events import FRAME_OUT, FRAME_STOP
 
 
 # Without `@dataclass`, `Scope()` would create an empty object and the four fields would have to be 

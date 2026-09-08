@@ -1,12 +1,11 @@
 """
 tcr_foundation -- TCR repertoire library (first cut, isolated).
 
-Layers (protocol-based, swappable):
-  schema       -- canonical clonotype table + ingestion (column auto-detect) + tidytcells germline resolver
-  encoders     -- ClonotypeEncoder protocol -> per-clonotype embedding Z [N, dim]  (neural, later tcrdist)
-  featurizers  -- RepertoireFeaturizer protocol -> one vector per donor  (V-usage, k-mer, mean+cov, whitened-SPD)
-  metrics      -- donor-centric retrieval AUROC (canonical, one implementation)
-  registry     -- name -> (FS path | HF repo) model loader  (HF backend added last)
+The implementation is grouped by subject: ``core`` defines light-weight contracts,
+``repertoire`` provides encoders and feature maps, ``recombination`` handles event and
+nucleotide machinery, ``igor`` handles individualised generation models, ``cloud`` builds
+and describes Foundation-model clouds, and ``evaluation`` contains comparison protocols.
+Historical flat module names remain import-compatible.
 
 SELF-CONTAINED: the pipeline (repertoire.*, utils.*, foundation.*) is VENDORED into `_vendor/` and put on
 sys.path here -- the package needs nothing outside this folder, so it can be shared and used (including
@@ -36,8 +35,11 @@ VENDOR_DIR = _VENDOR
 # --- lazy public API (PEP 562): submodules load on first access, so `import tcr_foundation` stays LIGHT
 #     (no torch pulled) until you touch a layer that needs it. ---
 _SUBMODULES = {
-    "protocols", "schema", "events", "encoders", "featurizers", "descriptors",
-    "metrics", "diagnostics", "generator", "igor_autoencoder", "igor_generator", "oar", "oar_clouds", "registry", "benchmark", "train", "hf",
+    "core", "repertoire", "cloud", "evaluation", "recombination", "igor", "integrations", "training",
+    "protocols", "schema", "events", "encoders", "featurizers", "descriptors", "metrics",
+    "diagnostics", "generator", "igor_autoencoder", "igor_generator", "igor_gene_level", "oar",
+    "oar_clouds", "registry", "benchmark", "train", "hf", "germline", "scenarios",
+    "prototype_reference", "cloud_descriptors", "paired_occupancy", "patient_reference_knn",
 }
 __all__ = sorted(_SUBMODULES) + ["load", "REPO_ROOT", "VENDOR_DIR", "__version__"]
 
@@ -50,7 +52,7 @@ def __getattr__(name):
         globals()[name] = mod
         return mod
     if name == "load":                                  # tcr_foundation.load("joint-tiny")
-        load = importlib.import_module(".registry", __name__).load
+        load = importlib.import_module(".core.registry", __name__).load
         globals()["load"] = load
         return load
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
