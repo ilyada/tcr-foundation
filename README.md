@@ -39,6 +39,12 @@ For development, an editable install from a checkout works the same way:
 pip install -e ".[neural,hf]"     # also adds the `tcr-foundation-train` console script
 ```
 
+### Source layout
+
+The implementation is grouped by biological and computational responsibility. `core/` defines the canonical clonotype table, interfaces, and model registry; `repertoire/` implements amino-acid clonotype encoders and repertoire feature maps; `recombination/` contains event parsing, OAR, germline templates, scenario enumeration, and nucleotide generation; `igor/` contains IGoR fitting and donor-level parameter representations; `cloud/` constructs and describes saved Foundation-model clouds; `evaluation/` contains benchmark and patient-reference analyses; `integrations/` contains optional external-service adapters; and `training/` contains the training entry point. `_vendor/` is frozen external code. The former flat module paths remain supported as compatibility imports and command-line entry points.
+
+Place a new module in the domain that owns its data: canonical tables and interfaces in `core/`; productive amino-acid clonotypes in `repertoire/`; raw rearrangements and V(D)J templates in `recombination/`; non-productive IGoR models in `igor/`; saved patient clouds in `cloud/`; and biological validation in `evaluation/`. Do not add a generic `helpers.py`.
+
 ## Quickstart: repertoire → encoder → descriptor → AUROC
 
 ```python
@@ -74,7 +80,7 @@ feats = {"V-usage": featurizers.VUsage(), "model mean+cov": descriptors.MeanCov(
 print(B.donor_task(feats, dfs, labels, ref_sizes=(1, 3, 10)))   # {feature: {ref_size: auroc}}
 ```
 
-## Layers (protocol-based, swappable — see `protocols.py`)
+## Layers (protocol-based, swappable — see `core/protocols.py`)
 
 | Layer | What it gives you |
 |---|---|
