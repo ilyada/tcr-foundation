@@ -1,4 +1,4 @@
-"""Paired patient-reference kNN--AUROC evaluation of occupancy descriptors.
+"""Paired patient-reference kNN--AUROC evaluation of cloud descriptors.
 
 The evaluator holds each sampled positive reference set fixed across raw/OAR
 descriptors and prototype resolutions.  It therefore measures descriptor
@@ -58,9 +58,15 @@ def parse_emerson_hla(source_dir: str | Path, samples: list[str]) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
-def _load_pair(descriptor_dir: Path, clusters: int) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
-    raw = pd.read_parquet(descriptor_dir / f"occupancy_k{clusters}_raw.parquet")
-    oar = pd.read_parquet(descriptor_dir / f"occupancy_k{clusters}_oar.parquet")
+def _load_pair(descriptor_dir: Path, clusters: int, pattern: str = "occupancy_k{clusters}_{branch}.parquet") -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
+    """Load one raw/OAR descriptor pair through a named resolution/branch pattern."""
+    try:
+        raw_path = descriptor_dir / pattern.format(clusters=clusters, branch="raw")
+        oar_path = descriptor_dir / pattern.format(clusters=clusters, branch="oar")
+    except KeyError as exc:
+        raise ValueError("descriptor pattern may contain only {clusters} and {branch}") from exc
+    raw = pd.read_parquet(raw_path)
+    oar = pd.read_parquet(oar_path)
     if raw["sample"].duplicated().any() or oar["sample"].duplicated().any():
         raise ValueError(f"K={clusters}: descriptor sample identifiers must be unique")
     raw = raw.sort_values("sample").reset_index(drop=True)
@@ -99,7 +105,7 @@ def _reference_draws(labels: np.ndarray, samples: np.ndarray, seed: int) -> tupl
     return draw_specs, pd.DataFrame(audit_rows)
 
 
-def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path, target_name: str) -> None:
+def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path, target_name: str, descriptor_name: str, resolution_labels: dict[int, str] | None = None) -> None:
     """Draw macro AUROC curves with central 95% draw intervals for one target family."""
     import matplotlib
 
@@ -109,7 +115,9 @@ def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path, target_na
     column = f"{branch}_auroc"
     macro_draws = draws.groupby(["clusters", "reference_size", "draw"], as_index=False)[column].mean()
     clusters = sorted(macro_draws["clusters"].unique())
-    figure, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True, sharey=True, constrained_layout=True)
+    n_columns = min(2, len(clusters))
+    n_rows = int(np.ceil(len(clusters) / n_columns))
+    figure, axes = plt.subplots(n_rows, n_columns, figsize=(5 * n_columns, 3.5 * n_rows), sharex=True, sharey=True, constrained_layout=True, squeeze=False)
     for axis, clusters_value in zip(axes.flat, clusters):
         subset = macro_draws[macro_draws["clusters"] == clusters_value]
         summary = subset.groupby("reference_size")[column].agg(mean="mean", low=lambda values: values.quantile(0.025), high=lambda values: values.quantile(0.975)).reset_index().sort_values("reference_size")
@@ -120,22 +128,24 @@ def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path, target_na
         axis.set_xticks(REFERENCE_SIZES)
         axis.set_xticklabels([str(value) for value in REFERENCE_SIZES])
         axis.set_ylim(0, 1)
-        axis.set_title(f"K = {clusters_value}")
+        axis.set_title((resolution_labels or {}).get(clusters_value, f"K = {clusters_value}"))
         axis.grid(axis="y", alpha=0.3)
     for axis in axes[:, 0]:
         axis.set_ylabel(f"Macro {target_name} AUROC")
     for axis in axes[-1, :]:
         axis.set_xlabel("Positive reference-set size r")
-    figure.suptitle(f"{branch.upper()} occupancy descriptors: {target_name} patient-reference kNN")
+    for axis in axes.flat[len(clusters):]:
+        axis.set_visible(False)
+    figure.suptitle(f"{branch.upper()} {descriptor_name} descriptors: {target_name} patient-reference kNN")
     figure.savefig(output, dpi=300, bbox_inches="tight")
     plt.close(figure)
 
 
-def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str | Path, clusters: tuple[int, ...] = (16, 32, 64, 128), seed: int = 20260907) -> tuple[pd.DataFrame, pd.DataFrame]:
+def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str | Path, clusters: tuple[int, ...] = (16, 32, 64, 128), seed: int = 20260907, descriptor_pattern: str = "occupancy_k{clusters}_{branch}.parquet", descriptor_name: str = "occupancy", resolution_labels: dict[int, str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate all class-I HLA allele targets and write paired raw/OAR results."""
     descriptor_dir, output = Path(descriptor_dir), Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    first_raw, _, _ = _load_pair(descriptor_dir, clusters[0])
+    first_raw, _, _ = _load_pair(descriptor_dir, clusters[0], descriptor_pattern)
     descriptor_samples = first_raw["sample"].to_numpy(dtype=str)
     metadata = parse_emerson_hla(source_dir, descriptor_samples.tolist())
     if not np.array_equal(metadata["sample"].to_numpy(dtype=str), descriptor_samples):
@@ -168,7 +178,7 @@ def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str
             for index in refs:
                 reference_rows.append({"target": spec["target"], "reference_size": spec["reference_size"], "draw": spec["draw"], "sample": samples[index]})
         for clusters_value in clusters:
-            raw, oar, columns = _load_pair(descriptor_dir, clusters_value)
+            raw, oar, columns = _load_pair(descriptor_dir, clusters_value, descriptor_pattern)
             raw = raw[raw["sample"].isin(samples)].sort_values("sample").reset_index(drop=True)
             oar = oar[oar["sample"].isin(samples)].sort_values("sample").reset_index(drop=True)
             if not np.array_equal(raw["sample"].to_numpy(dtype=str), samples) or not np.array_equal(oar["sample"].to_numpy(dtype=str), samples):
@@ -195,18 +205,18 @@ def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str
     macro.to_parquet(output / "hla_macro_summary.parquet", index=False)
     references.to_parquet(output / "reference_draws.parquet", index=False)
     target_qc.to_parquet(output / "hla_target_qc.parquet", index=False)
-    _draw_macro_figure(draws, "raw", output / "hla_knn_auroc_raw.png", "HLA")
-    _draw_macro_figure(draws, "oar", output / "hla_knn_auroc_oar.png", "HLA")
+    _draw_macro_figure(draws, "raw", output / "hla_knn_auroc_raw.png", "HLA", descriptor_name, resolution_labels)
+    _draw_macro_figure(draws, "oar", output / "hla_knn_auroc_oar.png", "HLA", descriptor_name, resolution_labels)
     with (output / "manifest.json").open("w", encoding="utf-8") as handle:
-        json.dump({"targets": "known class-I HLA alleles from source sample tags", "descriptor_dir": str(descriptor_dir), "source_dir": str(source_dir), "clusters": list(clusters), "reference_sizes": list(REFERENCE_SIZES), "n_draws": N_DRAWS, "seed": seed, "n_descriptor_samples": len(descriptor_samples), "n_hla_evaluable_samples": len(samples), "n_targets": len(target_labels), "figures": ["hla_knn_auroc_raw.png", "hla_knn_auroc_oar.png"]}, handle, indent=2)
+        json.dump({"targets": "known class-I HLA alleles from source sample tags", "descriptor_dir": str(descriptor_dir), "descriptor_pattern": descriptor_pattern, "descriptor_name": descriptor_name, "source_dir": str(source_dir), "clusters": list(clusters), "reference_sizes": list(REFERENCE_SIZES), "n_draws": N_DRAWS, "seed": seed, "n_descriptor_samples": len(descriptor_samples), "n_hla_evaluable_samples": len(samples), "n_targets": len(target_labels), "figures": ["hla_knn_auroc_raw.png", "hla_knn_auroc_oar.png"]}, handle, indent=2)
     return summary, macro
 
 
-def evaluate_cmv(descriptor_dir: str | Path, source_dir: str | Path, output: str | Path, clusters: tuple[int, ...] = (16, 32, 64, 128), seed: int = 20260907) -> tuple[pd.DataFrame, pd.DataFrame]:
+def evaluate_cmv(descriptor_dir: str | Path, source_dir: str | Path, output: str | Path, clusters: tuple[int, ...] = (16, 32, 64, 128), seed: int = 20260907, descriptor_pattern: str = "occupancy_k{clusters}_{branch}.parquet", descriptor_name: str = "occupancy", resolution_labels: dict[int, str] | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate known CMV status with paired raw/OAR occupancy descriptors."""
     descriptor_dir, output = Path(descriptor_dir), Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    first_raw, _, _ = _load_pair(descriptor_dir, clusters[0])
+    first_raw, _, _ = _load_pair(descriptor_dir, clusters[0], descriptor_pattern)
     descriptor_samples = first_raw["sample"].to_numpy(dtype=str)
     metadata = parse_emerson_hla(source_dir, descriptor_samples.tolist())
     included = metadata["included_cmv_eval"].to_numpy(dtype=bool)
@@ -221,7 +231,7 @@ def evaluate_cmv(descriptor_dir: str | Path, source_dir: str | Path, output: str
         for index in spec["reference_indices"]:
             reference_rows.append({"target": "CMV_positive", "reference_size": spec["reference_size"], "draw": spec["draw"], "sample": samples[index]})
     for clusters_value in clusters:
-        raw, oar, columns = _load_pair(descriptor_dir, clusters_value)
+        raw, oar, columns = _load_pair(descriptor_dir, clusters_value, descriptor_pattern)
         raw = raw[raw["sample"].isin(samples)].sort_values("sample").reset_index(drop=True)
         oar = oar[oar["sample"].isin(samples)].sort_values("sample").reset_index(drop=True)
         if not np.array_equal(raw["sample"].to_numpy(dtype=str), samples) or not np.array_equal(oar["sample"].to_numpy(dtype=str), samples):
@@ -235,7 +245,7 @@ def evaluate_cmv(descriptor_dir: str | Path, source_dir: str | Path, output: str
     draws = pd.DataFrame(all_draw_rows).sort_values(["clusters", "reference_size", "draw"]).reset_index(drop=True)
     summary = draws.groupby(["clusters", "reference_size"], as_index=False).agg(n_draws=("draw", "size"), raw_auroc_mean=("raw_auroc", "mean"), raw_auroc_sd=("raw_auroc", "std"), oar_auroc_mean=("oar_auroc", "mean"), oar_auroc_sd=("oar_auroc", "std"), oar_minus_raw_mean=("oar_minus_raw", "mean"), oar_minus_raw_sd=("oar_minus_raw", "std"))
     draws.to_parquet(output / "cmv_draws.parquet", index=False); summary.to_parquet(output / "cmv_summary.parquet", index=False); target_qc.to_parquet(output / "cmv_target_qc.parquet", index=False); pd.DataFrame(reference_rows).to_parquet(output / "cmv_reference_draws.parquet", index=False)
-    _draw_macro_figure(draws, "raw", output / "cmv_knn_auroc_raw.png", "CMV"); _draw_macro_figure(draws, "oar", output / "cmv_knn_auroc_oar.png", "CMV")
+    _draw_macro_figure(draws, "raw", output / "cmv_knn_auroc_raw.png", "CMV", descriptor_name, resolution_labels); _draw_macro_figure(draws, "oar", output / "cmv_knn_auroc_oar.png", "CMV", descriptor_name, resolution_labels)
     return summary, summary
 
 
@@ -245,13 +255,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--emerson-tsv", required=True, help="directory containing P*.tsv Emerson source files")
     parser.add_argument("--out", required=True, help="output directory for HLA kNN-AUROC artefacts")
     parser.add_argument("--clusters", nargs="+", type=int, default=[16, 32, 64, 128])
+    parser.add_argument("--descriptor-pattern", default="occupancy_k{clusters}_{branch}.parquet", help="table pattern with {clusters} and {branch}")
+    parser.add_argument("--descriptor-name", default="occupancy", help="label used in figure titles")
     parser.add_argument("--targets", nargs="+", choices=["hla", "cmv"], default=["hla"])
     parser.add_argument("--seed", type=int, default=20260907)
     args = parser.parse_args(argv)
     if "hla" in args.targets:
-        evaluate_hla(args.descriptors, args.emerson_tsv, args.out, tuple(args.clusters), args.seed)
+        evaluate_hla(args.descriptors, args.emerson_tsv, args.out, tuple(args.clusters), args.seed, args.descriptor_pattern, args.descriptor_name)
     if "cmv" in args.targets:
-        evaluate_cmv(args.descriptors, args.emerson_tsv, args.out, tuple(args.clusters), args.seed)
+        evaluate_cmv(args.descriptors, args.emerson_tsv, args.out, tuple(args.clusters), args.seed, args.descriptor_pattern, args.descriptor_name)
 
 
 if __name__ == "__main__":
