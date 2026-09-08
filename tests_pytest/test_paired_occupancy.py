@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from tcr_foundation.paired_occupancy import build_paired_occupancies
+from tcr_foundation.cloud_descriptors import build_paired_descriptors
 
 
 def _cloud(path: Path, weights: list[float], *, reverse: bool = False, embedding_shift: float = 0.0) -> None:
@@ -76,3 +77,20 @@ def test_paired_occupancy_retains_repeated_clonotype_rows(tmp_path: Path):
     build_paired_occupancies(raw, oar, [codebooks / "k2"], tmp_path / "out")
     descriptor = pd.read_parquet(tmp_path / "out" / "occupancy_k2_raw.parquet").iloc[0]
     assert int(descriptor["n_clonotypes"]) == 2
+
+
+def test_generic_builder_writes_moments_and_occupancy_without_default_qc(tmp_path: Path):
+    raw, oar, codebooks = tmp_path / "raw", tmp_path / "oar", tmp_path / "codebooks"
+    raw.mkdir(); oar.mkdir(); codebooks.mkdir()
+    _cloud(raw / "P00001.parquet", [0.5, 0.5])
+    _cloud(oar / "P00001.parquet", [0.8, 0.2], reverse=True)
+    _codebook(codebooks / "k2")
+
+    out = tmp_path / "out"
+    manifest = build_paired_descriptors(raw, oar, out, kinds=("mean", "mean_cov", "occupancy"), codebook_dirs=[codebooks / "k2"], chunk_size=1)
+
+    assert manifest["kinds"] == ["mean", "mean_cov", "occupancy"]
+    assert not (out / "pair_qc.parquet").exists()
+    assert len([name for name in pd.read_parquet(out / "mean_raw.parquet").columns if name.startswith("d")]) == 2
+    assert len([name for name in pd.read_parquet(out / "mean_cov_raw.parquet").columns if name.startswith("d")]) == 5
+    assert (out / "occupancy_k2_raw.parquet").exists()
