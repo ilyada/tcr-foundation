@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .descriptors import (
+from .cloud_descriptors import (
     align_oar_to_raw as _align_oar_to_raw,
     build_paired_descriptors,
     effective_n as _effective_n,
