@@ -133,6 +133,18 @@ python -m tcr_foundation.generator --events <event-build-dir/events> --samples <
 
 The donor representation specifies what information about a donor enters the generator. The current baseline is `none`, which supplies no donor representation. The model contains a placeholder method for a future IGoR vector, but no donor-ID table or unknown-donor embedding remains. Until the versioned IGoR cache and its conditioner are implemented, any value other than `none` is rejected. Training also rejects missing cohort metadata, an empty holdout cohort, and an empty train/dev/holdout partition. The output CSV records best dev likelihood and held-out-donor likelihood for each class and donor representation.
 
+### Patient-level IGoR inputs
+
+For a donor-level IGoR representation, CD4 and CD8 libraries from the same person must be pooled before inference. `tcr_foundation.igor --mode patient` reads every library independently, retains valid out-of-frame and stop-carrying CDR3 nucleotide sequences, takes their nucleotide-level union within each donor, and runs one IGoR scope per donor. A patient represented by only one library is retained as a one-source scope. The required grouping rule is an explicit regular expression with one capture group, preventing the program from silently inferring biological identity from a filename convention.
+
+```bash
+python -m tcr_foundation.igor --input <cohort-dir> --mode patient --patient-pattern '^(HD_[^_]+)_' --out <new-patient-igor-dir> --igor <igor-executable>
+```
+
+The resulting `manifest.json` records every source library, the number of unique eligible sequences from each source, the patient-pool total submitted to IGoR, and `scope_kind: patient`. Existing library-level IGoR outputs are not modified.
+
+If a local IGoR run is interrupted, restart it with `--resume`: scopes containing native `final_marginals.txt` and `final_parms.txt` are skipped, even when interruption prevented this wrapper from writing its manifest. IGoR has no supported continuation of a partially written EM fit. To rerun only incomplete scopes, add `--restart-incomplete`; their existing directories are retained as `<scope>.interrupted[.N]`, while completed donors are never re-inferred. Do not use this flag while the original run is still active.
+
 ### OAR correction
 
 `tcr_foundation.oar` accepts one patient-level canonical parquet, Adaptive TSV, or MiXCR TSV. It estimates V- and J-gene over-amplification rates from that patient's non-productive (`out` plus `stop`) events independently for each `sample` and chain, then divides productive template counts by the product of their V/J factors. The corrected productive table retains raw counts and OAR provenance. It never overwrites the input.

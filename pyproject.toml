@@ -28,7 +28,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Heavy / backend-specific deps, opt-in so `pip install tcr-foundation` for pure analysis stays light.
-neural = ["torch", "transformers", "tidytcells"]   # neural clonotype encoder (our foundation model)
+neural = ["torch", "transformers", "tidytcells", "comet_ml"]   # neural models initialize Comet before Torch
 sceptr = ["sceptr"]                                 # SCEPTR baseline encoder
 tcrdist-ref = ["tcrdist3"]                           # reference TCRdist -- validation oracle only
 hf = ["huggingface_hub"]                             # model registry: HF Hub weight backend (added last)
