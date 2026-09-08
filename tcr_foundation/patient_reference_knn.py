@@ -46,7 +46,8 @@ def parse_emerson_hla(source_dir: str | Path, samples: list[str]) -> pd.DataFram
         path = source / f"{sample}.tsv"
         if not path.exists():
             raise FileNotFoundError(f"descriptor sample {sample} has no corresponding TSV under {source}")
-        tags = str(_read_first_record(path).get("sample_rich_tags") or "")
+        record = _read_first_record(path)
+        tags = ",".join(str(record.get(column) or "") for column in ("sample_catalog_tags", "sample_rich_tags"))
         alleles = sorted({f"{locus}{field}" for locus, field in HLA_TAG.findall(tags)})
         if not alleles:
             raise ValueError(f"{path}: no known class-I HLA call in sample_rich_tags")

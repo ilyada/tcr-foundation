@@ -7,9 +7,9 @@ def _descriptor(path, samples, values):
     pd.DataFrame({"sample": samples, "d0": [item[0] for item in values], "d1": [item[1] for item in values]}).to_parquet(path, index=False)
 
 
-def _tsv(path, sample, alleles):
+def _tsv(path, sample, alleles, field="sample_rich_tags"):
     tags = ",".join(f"HLA MHC class I:HLA-{allele[0]}*{allele[1:]}" for allele in alleles)
-    pd.DataFrame({"sample_name": [sample], "sample_rich_tags": [tags]}).to_csv(path, sep="\t", index=False)
+    pd.DataFrame({"sample_name": [sample], field: [tags]}).to_csv(path, sep="\t", index=False)
 
 
 def test_hla_evaluation_reuses_references_across_branches_and_resolutions(tmp_path):
@@ -21,8 +21,8 @@ def test_hla_evaluation_reuses_references_across_branches_and_resolutions(tmp_pa
     for clusters in (2, 3):
         _descriptor(descriptors / f"occupancy_k{clusters}_raw.parquet", samples, raw)
         _descriptor(descriptors / f"occupancy_k{clusters}_oar.parquet", samples, oar)
-    for sample, alleles in zip(samples, [("A01",), ("A01",), ("A01",), ("B07",), ("B07",), ("B07",)]):
-        _tsv(source / f"{sample}.tsv", sample, alleles)
+    for index, (sample, alleles) in enumerate(zip(samples, [("A01",), ("A01",), ("A01",), ("B07",), ("B07",), ("B07",)])):
+        _tsv(source / f"{sample}.tsv", sample, alleles, field="sample_catalog_tags" if index == 0 else "sample_rich_tags")
     summary, macro = evaluate_hla(descriptors, source, output, clusters=(2, 3), seed=7)
     draws = pd.read_parquet(output / "hla_draws.parquet")
     refs = pd.read_parquet(output / "reference_draws.parquet")
