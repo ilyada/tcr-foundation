@@ -13,16 +13,17 @@ def _tsv(path, sample, alleles, field="sample_rich_tags"):
 
 
 def test_hla_evaluation_reuses_references_across_branches_and_resolutions(tmp_path):
-    samples = [f"P{i:05d}" for i in range(1, 7)]
+    samples = [f"P{i:05d}" for i in range(1, 8)]
     descriptors, source, output = tmp_path / "descriptors", tmp_path / "source", tmp_path / "out"
     descriptors.mkdir(); source.mkdir()
-    raw = [(1, 0), (0.9, 0.1), (0.8, 0.2), (0, 1), (0.1, 0.9), (0.2, 0.8)]
-    oar = [(0.95, 0.05), (0.85, 0.15), (0.75, 0.25), (0.05, 0.95), (0.15, 0.85), (0.25, 0.75)]
+    raw = [(1, 0), (0.9, 0.1), (0.8, 0.2), (0, 1), (0.1, 0.9), (0.2, 0.8), (0.5, 0.5)]
+    oar = [(0.95, 0.05), (0.85, 0.15), (0.75, 0.25), (0.05, 0.95), (0.15, 0.85), (0.25, 0.75), (0.5, 0.5)]
     for clusters in (2, 3):
         _descriptor(descriptors / f"occupancy_k{clusters}_raw.parquet", samples, raw)
         _descriptor(descriptors / f"occupancy_k{clusters}_oar.parquet", samples, oar)
     for index, (sample, alleles) in enumerate(zip(samples, [("A01",), ("A01",), ("A01",), ("B07",), ("B07",), ("B07",)])):
         _tsv(source / f"{sample}.tsv", sample, alleles, field="sample_catalog_tags" if index == 0 else "sample_rich_tags")
+    _tsv(source / "P00007.tsv", "P00007", [])
     summary, macro = evaluate_hla(descriptors, source, output, clusters=(2, 3), seed=7)
     draws = pd.read_parquet(output / "hla_draws.parquet")
     refs = pd.read_parquet(output / "reference_draws.parquet")
@@ -30,5 +31,6 @@ def test_hla_evaluation_reuses_references_across_branches_and_resolutions(tmp_pa
     assert set(macro["reference_size"]) == {1, 2}
     assert draws.groupby(["target", "reference_size", "draw"])[["raw_auroc", "oar_auroc"]].size().eq(2).all()
     assert not refs.empty
+    assert not pd.read_parquet(output / "metadata_join.parquet").iloc[-1]["included_hla_eval"]
     assert (output / "hla_knn_auroc_raw.png").exists()
     assert (output / "hla_knn_auroc_oar.png").exists()

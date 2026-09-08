@@ -47,11 +47,9 @@ def parse_emerson_hla(source_dir: str | Path, samples: list[str]) -> pd.DataFram
         if not path.exists():
             raise FileNotFoundError(f"descriptor sample {sample} has no corresponding TSV under {source}")
         record = _read_first_record(path)
-        tags = ",".join(str(record.get(column) or "") for column in ("sample_catalog_tags", "sample_rich_tags"))
+        tags = ",".join(str(record.get(column) or "") for column in ("sample_catalog_tags", "sample_rich_tags", "sample_tags"))
         alleles = sorted({f"{locus}{field}" for locus, field in HLA_TAG.findall(tags)})
-        if not alleles:
-            raise ValueError(f"{path}: no known class-I HLA call in sample_rich_tags")
-        rows.append({"sample": sample, "hla_alleles": alleles, "n_hla_alleles": len(alleles)})
+        rows.append({"sample": sample, "hla_alleles": alleles, "n_hla_alleles": len(alleles), "included_hla_eval": bool(alleles)})
     return pd.DataFrame(rows)
 
 
@@ -133,11 +131,16 @@ def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str
     descriptor_dir, output = Path(descriptor_dir), Path(output)
     output.mkdir(parents=True, exist_ok=True)
     first_raw, _, _ = _load_pair(descriptor_dir, clusters[0])
-    samples = first_raw["sample"].to_numpy(dtype=str)
-    metadata = parse_emerson_hla(source_dir, samples.tolist())
-    if not np.array_equal(metadata["sample"].to_numpy(dtype=str), samples):
+    descriptor_samples = first_raw["sample"].to_numpy(dtype=str)
+    metadata = parse_emerson_hla(source_dir, descriptor_samples.tolist())
+    if not np.array_equal(metadata["sample"].to_numpy(dtype=str), descriptor_samples):
         raise AssertionError("metadata extraction changed descriptor sample order")
     metadata.to_parquet(output / "metadata_join.parquet", index=False)
+    included = metadata["included_hla_eval"].to_numpy(dtype=bool)
+    if not included.any():
+        raise ValueError("no descriptor donors have a recorded class-I HLA call")
+    samples = descriptor_samples[included]
+    metadata = metadata.loc[included].reset_index(drop=True)
     labels = np.array([allele for alleles in metadata["hla_alleles"] for allele in alleles], dtype=object)
     target_labels = np.array(sorted(set(labels)), dtype=object)
     draw_specs, target_qc = _reference_draws(
@@ -161,8 +164,10 @@ def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str
                 reference_rows.append({"target": spec["target"], "reference_size": spec["reference_size"], "draw": spec["draw"], "sample": samples[index]})
         for clusters_value in clusters:
             raw, oar, columns = _load_pair(descriptor_dir, clusters_value)
-            if not np.array_equal(raw["sample"].to_numpy(dtype=str), samples):
-                raise ValueError(f"K={clusters_value}: descriptor sample order differs from K={clusters[0]}")
+            raw = raw[raw["sample"].isin(samples)].sort_values("sample").reset_index(drop=True)
+            oar = oar[oar["sample"].isin(samples)].sort_values("sample").reset_index(drop=True)
+            if not np.array_equal(raw["sample"].to_numpy(dtype=str), samples) or not np.array_equal(oar["sample"].to_numpy(dtype=str), samples):
+                raise ValueError(f"K={clusters_value}: HLA-evaluable descriptor samples differ from K={clusters[0]}")
             raw_similarity = _cosine_gram(raw[columns].to_numpy(dtype=float))
             oar_similarity = _cosine_gram(oar[columns].to_numpy(dtype=float))
             for spec in target_draws:
@@ -188,7 +193,7 @@ def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str
     _draw_macro_figure(draws, "raw", output / "hla_knn_auroc_raw.png")
     _draw_macro_figure(draws, "oar", output / "hla_knn_auroc_oar.png")
     with (output / "manifest.json").open("w", encoding="utf-8") as handle:
-        json.dump({"targets": "known class-I HLA alleles from sample_rich_tags", "descriptor_dir": str(descriptor_dir), "source_dir": str(source_dir), "clusters": list(clusters), "reference_sizes": list(REFERENCE_SIZES), "n_draws": N_DRAWS, "seed": seed, "n_samples": len(samples), "n_targets": len(target_labels), "figures": ["hla_knn_auroc_raw.png", "hla_knn_auroc_oar.png"]}, handle, indent=2)
+        json.dump({"targets": "known class-I HLA alleles from source sample tags", "descriptor_dir": str(descriptor_dir), "source_dir": str(source_dir), "clusters": list(clusters), "reference_sizes": list(REFERENCE_SIZES), "n_draws": N_DRAWS, "seed": seed, "n_descriptor_samples": len(descriptor_samples), "n_hla_evaluable_samples": len(samples), "n_targets": len(target_labels), "figures": ["hla_knn_auroc_raw.png", "hla_knn_auroc_oar.png"]}, handle, indent=2)
     return summary, macro
 
 
