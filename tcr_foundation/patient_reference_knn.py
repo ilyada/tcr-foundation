@@ -21,6 +21,7 @@ from sklearn.metrics import roc_auc_score
 REFERENCE_SIZES = (1, 2, 5, 10, 20, 50)
 N_DRAWS = {1: 200, 2: 200, 5: 100, 10: 50, 20: 30, 50: 20}
 HLA_TAG = re.compile(r"(?:^|,)HLA MHC class I:HLA-([A-Z]+)\*([0-9]+)(?:,|$)")
+CMV_TAG = re.compile(r"(?:^|,)Virus Diseases:Cytomegalovirus ([+-])(?:,|$)")
 
 
 def _descriptor_columns(frame: pd.DataFrame) -> list[str]:
@@ -49,7 +50,11 @@ def parse_emerson_hla(source_dir: str | Path, samples: list[str]) -> pd.DataFram
         record = _read_first_record(path)
         tags = ",".join(str(record.get(column) or "") for column in ("sample_catalog_tags", "sample_rich_tags", "sample_tags"))
         alleles = sorted({f"{locus}{field}" for locus, field in HLA_TAG.findall(tags)})
-        rows.append({"sample": sample, "hla_alleles": alleles, "n_hla_alleles": len(alleles), "included_hla_eval": bool(alleles)})
+        cmv_calls = set(CMV_TAG.findall(tags))
+        if len(cmv_calls) > 1:
+            raise ValueError(f"{path}: conflicting known CMV calls")
+        cmv_status = {"+": "positive", "-": "negative"}.get(next(iter(cmv_calls), None), "missing")
+        rows.append({"sample": sample, "hla_alleles": alleles, "n_hla_alleles": len(alleles), "included_hla_eval": bool(alleles), "cmv_status": cmv_status, "included_cmv_eval": cmv_status != "missing"})
     return pd.DataFrame(rows)
 
 
@@ -94,8 +99,8 @@ def _reference_draws(labels: np.ndarray, samples: np.ndarray, seed: int) -> tupl
     return draw_specs, pd.DataFrame(audit_rows)
 
 
-def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path) -> None:
-    """Draw macro HLA AUROC curves with central 95% draw intervals for one branch."""
+def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path, target_name: str) -> None:
+    """Draw macro AUROC curves with central 95% draw intervals for one target family."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -118,10 +123,10 @@ def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path) -> None:
         axis.set_title(f"K = {clusters_value}")
         axis.grid(axis="y", alpha=0.3)
     for axis in axes[:, 0]:
-        axis.set_ylabel("Macro HLA AUROC")
+        axis.set_ylabel(f"Macro {target_name} AUROC")
     for axis in axes[-1, :]:
         axis.set_xlabel("Positive reference-set size r")
-    figure.suptitle(f"{branch.upper()} occupancy descriptors: HLA patient-reference kNN")
+    figure.suptitle(f"{branch.upper()} occupancy descriptors: {target_name} patient-reference kNN")
     figure.savefig(output, dpi=300, bbox_inches="tight")
     plt.close(figure)
 
@@ -190,11 +195,48 @@ def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str
     macro.to_parquet(output / "hla_macro_summary.parquet", index=False)
     references.to_parquet(output / "reference_draws.parquet", index=False)
     target_qc.to_parquet(output / "hla_target_qc.parquet", index=False)
-    _draw_macro_figure(draws, "raw", output / "hla_knn_auroc_raw.png")
-    _draw_macro_figure(draws, "oar", output / "hla_knn_auroc_oar.png")
+    _draw_macro_figure(draws, "raw", output / "hla_knn_auroc_raw.png", "HLA")
+    _draw_macro_figure(draws, "oar", output / "hla_knn_auroc_oar.png", "HLA")
     with (output / "manifest.json").open("w", encoding="utf-8") as handle:
         json.dump({"targets": "known class-I HLA alleles from source sample tags", "descriptor_dir": str(descriptor_dir), "source_dir": str(source_dir), "clusters": list(clusters), "reference_sizes": list(REFERENCE_SIZES), "n_draws": N_DRAWS, "seed": seed, "n_descriptor_samples": len(descriptor_samples), "n_hla_evaluable_samples": len(samples), "n_targets": len(target_labels), "figures": ["hla_knn_auroc_raw.png", "hla_knn_auroc_oar.png"]}, handle, indent=2)
     return summary, macro
+
+
+def evaluate_cmv(descriptor_dir: str | Path, source_dir: str | Path, output: str | Path, clusters: tuple[int, ...] = (16, 32, 64, 128), seed: int = 20260907) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Evaluate known CMV status with paired raw/OAR occupancy descriptors."""
+    descriptor_dir, output = Path(descriptor_dir), Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    first_raw, _, _ = _load_pair(descriptor_dir, clusters[0])
+    descriptor_samples = first_raw["sample"].to_numpy(dtype=str)
+    metadata = parse_emerson_hla(source_dir, descriptor_samples.tolist())
+    included = metadata["included_cmv_eval"].to_numpy(dtype=bool)
+    metadata.to_parquet(output / "cmv_metadata_join.parquet", index=False)
+    samples = descriptor_samples[included]
+    binary = metadata.loc[included, "cmv_status"].eq("positive").to_numpy(dtype=bool)
+    target_draws, target_qc = _reference_draws(np.where(binary, "CMV_positive", "__negative__"), samples, seed)
+    target_draws = [spec for spec in target_draws if spec["target"] == "CMV_positive"]
+    target_qc = target_qc[target_qc["target"] == "CMV_positive"].copy()
+    all_draw_rows, reference_rows = [], []
+    for spec in target_draws:
+        for index in spec["reference_indices"]:
+            reference_rows.append({"target": "CMV_positive", "reference_size": spec["reference_size"], "draw": spec["draw"], "sample": samples[index]})
+    for clusters_value in clusters:
+        raw, oar, columns = _load_pair(descriptor_dir, clusters_value)
+        raw = raw[raw["sample"].isin(samples)].sort_values("sample").reset_index(drop=True)
+        oar = oar[oar["sample"].isin(samples)].sort_values("sample").reset_index(drop=True)
+        if not np.array_equal(raw["sample"].to_numpy(dtype=str), samples) or not np.array_equal(oar["sample"].to_numpy(dtype=str), samples):
+            raise ValueError(f"K={clusters_value}: CMV-evaluable descriptor samples differ from K={clusters[0]}")
+        raw_similarity, oar_similarity = _cosine_gram(raw[columns].to_numpy(dtype=float)), _cosine_gram(oar[columns].to_numpy(dtype=float))
+        for spec in target_draws:
+            refs = spec["reference_indices"]; mask = np.ones(len(samples), dtype=bool); mask[refs] = False; y = binary[mask].astype(int)
+            raw_auc = float(roc_auc_score(y, raw_similarity[np.ix_(mask, refs)].max(axis=1)))
+            oar_auc = float(roc_auc_score(y, oar_similarity[np.ix_(mask, refs)].max(axis=1)))
+            all_draw_rows.append({"target": "CMV_positive", "clusters": clusters_value, "reference_size": spec["reference_size"], "draw": spec["draw"], "raw_auroc": raw_auc, "oar_auroc": oar_auc, "oar_minus_raw": oar_auc - raw_auc})
+    draws = pd.DataFrame(all_draw_rows).sort_values(["clusters", "reference_size", "draw"]).reset_index(drop=True)
+    summary = draws.groupby(["clusters", "reference_size"], as_index=False).agg(n_draws=("draw", "size"), raw_auroc_mean=("raw_auroc", "mean"), raw_auroc_sd=("raw_auroc", "std"), oar_auroc_mean=("oar_auroc", "mean"), oar_auroc_sd=("oar_auroc", "std"), oar_minus_raw_mean=("oar_minus_raw", "mean"), oar_minus_raw_sd=("oar_minus_raw", "std"))
+    draws.to_parquet(output / "cmv_draws.parquet", index=False); summary.to_parquet(output / "cmv_summary.parquet", index=False); target_qc.to_parquet(output / "cmv_target_qc.parquet", index=False); pd.DataFrame(reference_rows).to_parquet(output / "cmv_reference_draws.parquet", index=False)
+    _draw_macro_figure(draws, "raw", output / "cmv_knn_auroc_raw.png", "CMV"); _draw_macro_figure(draws, "oar", output / "cmv_knn_auroc_oar.png", "CMV")
+    return summary, summary
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -203,9 +245,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--emerson-tsv", required=True, help="directory containing P*.tsv Emerson source files")
     parser.add_argument("--out", required=True, help="output directory for HLA kNN-AUROC artefacts")
     parser.add_argument("--clusters", nargs="+", type=int, default=[16, 32, 64, 128])
+    parser.add_argument("--targets", nargs="+", choices=["hla", "cmv"], default=["hla"])
     parser.add_argument("--seed", type=int, default=20260907)
     args = parser.parse_args(argv)
-    evaluate_hla(args.descriptors, args.emerson_tsv, args.out, tuple(args.clusters), args.seed)
+    if "hla" in args.targets:
+        evaluate_hla(args.descriptors, args.emerson_tsv, args.out, tuple(args.clusters), args.seed)
+    if "cmv" in args.targets:
+        evaluate_cmv(args.descriptors, args.emerson_tsv, args.out, tuple(args.clusters), args.seed)
 
 
 if __name__ == "__main__":
