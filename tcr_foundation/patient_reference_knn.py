@@ -128,7 +128,8 @@ def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path, target_na
         axis.set_xticks(REFERENCE_SIZES)
         axis.set_xticklabels([str(value) for value in REFERENCE_SIZES])
         axis.set_ylim(0, 1)
-        axis.set_title((resolution_labels or {}).get(clusters_value, f"K = {clusters_value}"))
+        default_label = descriptor_name if len(clusters) == 1 and descriptor_name != "occupancy" else f"K = {clusters_value}"
+        axis.set_title((resolution_labels or {}).get(clusters_value, default_label))
         axis.grid(axis="y", alpha=0.3)
     for axis in axes[:, 0]:
         axis.set_ylabel(f"Macro {target_name} AUROC")
