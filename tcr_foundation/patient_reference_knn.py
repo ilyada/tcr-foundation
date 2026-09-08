@@ -32,7 +32,7 @@ def _descriptor_columns(frame: pd.DataFrame) -> list[str]:
 
 def _read_first_record(path: Path) -> dict[str, str]:
     with path.open("r", encoding="utf-8", newline="") as handle:
-        row = next(csv.DictReader(handle), None)
+        row = next(csv.DictReader(handle, delimiter="\t"), None)
     if row is None:
         raise ValueError(f"{path}: no data row")
     return row
