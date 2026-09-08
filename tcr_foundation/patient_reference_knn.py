@@ -95,6 +95,38 @@ def _reference_draws(labels: np.ndarray, samples: np.ndarray, seed: int) -> tupl
     return draw_specs, pd.DataFrame(audit_rows)
 
 
+def _draw_macro_figure(draws: pd.DataFrame, branch: str, output: Path) -> None:
+    """Draw macro HLA AUROC curves with central 95% draw intervals for one branch."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    column = f"{branch}_auroc"
+    macro_draws = draws.groupby(["clusters", "reference_size", "draw"], as_index=False)[column].mean()
+    clusters = sorted(macro_draws["clusters"].unique())
+    figure, axes = plt.subplots(2, 2, figsize=(10, 7), sharex=True, sharey=True, constrained_layout=True)
+    for axis, clusters_value in zip(axes.flat, clusters):
+        subset = macro_draws[macro_draws["clusters"] == clusters_value]
+        summary = subset.groupby("reference_size")[column].agg(mean="mean", low=lambda values: values.quantile(0.025), high=lambda values: values.quantile(0.975)).reset_index().sort_values("reference_size")
+        x = summary["reference_size"].to_numpy()
+        axis.plot(x, summary["mean"], marker="o", color="#2b6cb0", linewidth=2)
+        axis.fill_between(x, summary["low"], summary["high"], color="#2b6cb0", alpha=0.2, linewidth=0)
+        axis.set_xscale("log")
+        axis.set_xticks(REFERENCE_SIZES)
+        axis.set_xticklabels([str(value) for value in REFERENCE_SIZES])
+        axis.set_ylim(0, 1)
+        axis.set_title(f"K = {clusters_value}")
+        axis.grid(axis="y", alpha=0.3)
+    for axis in axes[:, 0]:
+        axis.set_ylabel("Macro HLA AUROC")
+    for axis in axes[-1, :]:
+        axis.set_xlabel("Positive reference-set size r")
+    figure.suptitle(f"{branch.upper()} occupancy descriptors: HLA patient-reference kNN")
+    figure.savefig(output, dpi=300, bbox_inches="tight")
+    plt.close(figure)
+
+
 def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str | Path, clusters: tuple[int, ...] = (16, 32, 64, 128), seed: int = 20260907) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate all class-I HLA allele targets and write paired raw/OAR results."""
     descriptor_dir, output = Path(descriptor_dir), Path(output)
@@ -152,8 +184,10 @@ def evaluate_hla(descriptor_dir: str | Path, source_dir: str | Path, output: str
     macro.to_parquet(output / "hla_macro_summary.parquet", index=False)
     references.to_parquet(output / "reference_draws.parquet", index=False)
     target_qc.to_parquet(output / "hla_target_qc.parquet", index=False)
+    _draw_macro_figure(draws, "raw", output / "hla_knn_auroc_raw.png")
+    _draw_macro_figure(draws, "oar", output / "hla_knn_auroc_oar.png")
     with (output / "manifest.json").open("w", encoding="utf-8") as handle:
-        json.dump({"targets": "known class-I HLA alleles from sample_rich_tags", "descriptor_dir": str(descriptor_dir), "source_dir": str(source_dir), "clusters": list(clusters), "reference_sizes": list(REFERENCE_SIZES), "n_draws": N_DRAWS, "seed": seed, "n_samples": len(samples), "n_targets": len(target_labels)}, handle, indent=2)
+        json.dump({"targets": "known class-I HLA alleles from sample_rich_tags", "descriptor_dir": str(descriptor_dir), "source_dir": str(source_dir), "clusters": list(clusters), "reference_sizes": list(REFERENCE_SIZES), "n_draws": N_DRAWS, "seed": seed, "n_samples": len(samples), "n_targets": len(target_labels), "figures": ["hla_knn_auroc_raw.png", "hla_knn_auroc_oar.png"]}, handle, indent=2)
     return summary, macro
 
 

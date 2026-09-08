@@ -30,3 +30,5 @@ def test_hla_evaluation_reuses_references_across_branches_and_resolutions(tmp_pa
     assert set(macro["reference_size"]) == {1, 2}
     assert draws.groupby(["target", "reference_size", "draw"])[["raw_auroc", "oar_auroc"]].size().eq(2).all()
     assert not refs.empty
+    assert (output / "hla_knn_auroc_raw.png").exists()
+    assert (output / "hla_knn_auroc_oar.png").exists()
