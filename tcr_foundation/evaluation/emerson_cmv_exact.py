@@ -161,20 +161,40 @@ def _fisher_statistics(counts: dict[str, list[int]], class_sizes: dict[str, int]
     return pd.DataFrame(rows).sort_values(["p_fisher_one_sided", "p_positive_carriers", "clonotype_key"], ascending=[True, False, True], ignore_index=True)
 
 
-def _neg_log_likelihood(params: np.ndarray, n_values: np.ndarray, k_values: np.ndarray) -> float:
-    """Negative beta-binomial log likelihood up to the class-invariant term."""
-    alpha, beta = params
-    if alpha <= 0 or beta <= 0:
+def _neg_log_likelihood(log_params: np.ndarray, n_values: np.ndarray, k_values: np.ndarray) -> float:
+    """Negative beta-binomial log likelihood in numerically stable log parameters."""
+    alpha, beta = np.exp(log_params)
+    if not np.isfinite(alpha) or not np.isfinite(beta):
         return float("inf")
     return float(-(np.sum(betaln(k_values + alpha, n_values - k_values + beta)) - len(n_values) * betaln(alpha, beta)))
 
 
 def _fit_beta_binomial(n_values: np.ndarray, k_values: np.ndarray) -> dict[str, float]:
-    """Fit positive beta-binomial shape parameters for one CMV class."""
-    result = minimize(_neg_log_likelihood, x0=np.array([1.0, 1000.0]), args=(n_values, k_values), method="L-BFGS-B", bounds=((1e-5, None), (1e-5, None)))
-    if not result.success:
-        raise RuntimeError(f"beta-binomial optimisation failed: {result.message}")
-    return {"alpha": float(result.x[0]), "beta": float(result.x[1]), "n_donors": int(len(n_values))}
+    """Fit one class using bounded log parameters and multiple sparse-data starts.
+
+    The CMV signature is sparse relative to repertoire size.  Direct optimisation
+    over positive ``alpha`` and ``beta`` is poorly scaled in that regime and may
+    stop at a non-finite L-BFGS line search.  Optimising their logarithms keeps
+    both shapes positive and permits a stable derivative-free coarse search.
+    """
+    if len(n_values) == 0 or np.any(n_values <= 0) or np.any(k_values < 0) or np.any(k_values > n_values):
+        raise ValueError("invalid beta-binomial counts")
+    observed_rate = float(np.clip(np.mean(k_values / n_values), 1e-9, 1 - 1e-9))
+    concentrations = (1.0, 10.0, 100.0, 1_000.0, 10_000.0, 100_000.0)
+    starts = [np.log((observed_rate * concentration, (1 - observed_rate) * concentration)) for concentration in concentrations]
+    starts.append(np.log((1.0, 1_000.0)))
+    bounds = ((-20.0, 25.0), (-20.0, 25.0))
+    candidates = []
+    for start in starts:
+        coarse = minimize(_neg_log_likelihood, x0=start, args=(n_values, k_values), method="Powell", bounds=bounds, options={"maxiter": 2_000, "xtol": 1e-8, "ftol": 1e-10})
+        if np.isfinite(coarse.fun):
+            polished = minimize(_neg_log_likelihood, x0=coarse.x, args=(n_values, k_values), method="L-BFGS-B", bounds=bounds)
+            candidates.append(polished if np.isfinite(polished.fun) else coarse)
+    if not candidates:
+        raise RuntimeError("beta-binomial optimisation produced no finite objective")
+    best = min(candidates, key=lambda result: result.fun)
+    alpha, beta = np.exp(best.x)
+    return {"alpha": float(alpha), "beta": float(beta), "n_donors": int(len(n_values)), "negative_log_likelihood": float(best.fun)}
 
 
 def _posterior_probability(n_values: np.ndarray, k_values: np.ndarray, negative: dict[str, float], positive: dict[str, float]) -> np.ndarray:
