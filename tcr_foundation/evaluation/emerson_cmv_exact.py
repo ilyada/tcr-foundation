@@ -25,9 +25,11 @@ import hashlib
 import json
 import re
 import time
+import xml.etree.ElementTree as element_tree
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
+from zipfile import ZipFile
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -62,6 +64,65 @@ def _without_allele(gene: object) -> str:
     return re.sub(r"\*[0-9]+$", "", str(gene).strip())
 
 
+def _xlsx_column_index(cell_reference: str) -> int:
+    """Convert an XLSX coordinate such as ``AB12`` to its zero-based column."""
+    letters = re.match(r"[A-Z]+", cell_reference)
+    if letters is None:
+        raise ValueError(f"invalid XLSX cell reference: {cell_reference!r}")
+    index = 0
+    for letter in letters.group(0):
+        index = index * 26 + ord(letter) - ord("A") + 1
+    return index - 1
+
+
+def _read_xlsx_without_optional_engine(path: Path) -> pd.DataFrame:
+    """Read the first simple XLSX worksheet using only the Python standard library.
+
+    Nature's supplementary table is a flat shared-string worksheet.  This
+    fallback makes the exact comparison runnable in the cluster environment
+    without installing the optional ``openpyxl`` dependency.
+    """
+    namespace = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with ZipFile(path) as archive:
+        shared_strings: list[str] = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared_root = element_tree.fromstring(archive.read("xl/sharedStrings.xml"))
+            for node in shared_root.findall("x:si", namespace):
+                shared_strings.append("".join(text.text or "" for text in node.iterfind(".//x:t", namespace)))
+        sheet_root = element_tree.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+    rows: list[list[str]] = []
+    for row in sheet_root.findall(".//x:sheetData/x:row", namespace):
+        cells: dict[int, str] = {}
+        for cell in row.findall("x:c", namespace):
+            reference = cell.get("r")
+            if reference is None:
+                continue
+            value = cell.find("x:v", namespace)
+            raw = "" if value is None or value.text is None else value.text
+            if cell.get("t") == "s" and raw:
+                text = shared_strings[int(raw)]
+            elif cell.get("t") == "inlineStr":
+                text = "".join(item.text or "" for item in cell.iterfind(".//x:t", namespace))
+            else:
+                text = raw
+            cells[_xlsx_column_index(reference)] = text
+        rows.append([cells.get(index, "") for index in range(max(cells, default=-1) + 1)])
+    if not rows:
+        raise ValueError(f"{path}: first worksheet is empty")
+    width = len(rows[0])
+    if not all(len(row) <= width for row in rows[1:]):
+        raise ValueError(f"{path}: data row exceeds header width")
+    return pd.DataFrame([row + [""] * (width - len(row)) for row in rows[1:]], columns=rows[0])
+
+
+def _read_published_table(path: Path) -> pd.DataFrame:
+    """Read the published XLSX, tolerating an environment without openpyxl."""
+    try:
+        return pd.read_excel(path)
+    except ImportError:
+        return _read_xlsx_without_optional_engine(path)
+
+
 def compare_published_signature(
     published_reference: str | Path,
     reproduced_signature: str | Path,
@@ -83,7 +144,7 @@ def compare_published_signature(
     )
     if results.exists():
         raise FileExistsError(f"results directory must be new: {results}")
-    published = pd.read_excel(published_path)
+    published = _read_published_table(published_path)
     v_column = _published_column(published, {"vgene", "v", "vsegment"}, "V-gene")
     cdr3_column = _published_column(
         published,
