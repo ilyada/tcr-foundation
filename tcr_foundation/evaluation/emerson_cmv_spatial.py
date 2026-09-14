@@ -626,7 +626,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--published-reference", required=True)
     parser.add_argument("--clouds-dir", required=True)
     parser.add_argument("--emerson-tsv", required=True, help="source directory containing P*.tsv")
-    parser.add_argument("--results", required=True, help="new directory for compact final artefacts")
+    parser.add_argument("--results", help="new directory for compact final artefacts in the original distance-null mode")
     parser.add_argument("--draws", type=int, default=500)
     parser.add_argument("--neighbours", type=int, nargs="+", default=(1, 3, 5, 10))
     parser.add_argument("--minimum-pool", type=int, default=20)
@@ -664,6 +664,8 @@ def main(argv: list[str] | None = None) -> None:
             parser.error("--local-classifier-results, --local-enrichment-input, --clouds-dir, --keck-clouds-dir, and --emerson-tsv are required together")
         run_local_neighbour_classifier(args.local_enrichment_input, args.clouds_dir, args.keck_clouds_dir, args.emerson_tsv, args.local_classifier_results)
         return
+    if not args.results:
+        parser.error("--results is required unless a local-enrichment or local-classifier mode is selected")
     run_spatial_test(args.published_reference, args.clouds_dir, args.emerson_tsv, args.results, draws=args.draws, neighbours=tuple(args.neighbours), minimum_pool=args.minimum_pool, prevalence_tolerances=tuple(args.prevalence_tolerances), seed=args.seed)
 
 
