@@ -200,7 +200,7 @@ def run_spatial_test(
     results_dir: str | Path,
     *,
     draws: int = 500,
-    neighbours: tuple[int, ...] = (1, 3, 5),
+    neighbours: tuple[int, ...] = (1, 3, 5, 10),
     minimum_pool: int = 20,
     prevalence_tolerances: tuple[int, ...] = (0, 1, 2, 5, 10, 20, 50),
     seed: int = 0,
@@ -269,7 +269,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--emerson-tsv", required=True, help="source directory containing P*.tsv")
     parser.add_argument("--results", required=True, help="new directory for compact final artefacts")
     parser.add_argument("--draws", type=int, default=500)
-    parser.add_argument("--neighbours", type=int, nargs="+", default=(1, 3, 5))
+    parser.add_argument("--neighbours", type=int, nargs="+", default=(1, 3, 5, 10))
     parser.add_argument("--minimum-pool", type=int, default=20)
     parser.add_argument("--prevalence-tolerances", type=int, nargs="+", default=(0, 1, 2, 5, 10, 20, 50))
     parser.add_argument("--seed", type=int, default=0)
