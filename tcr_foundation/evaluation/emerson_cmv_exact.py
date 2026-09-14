@@ -57,6 +57,11 @@ def _published_column(frame: pd.DataFrame, aliases: set[str], label: str) -> str
     )
 
 
+def _without_allele(gene: object) -> str:
+    """Remove only the IMGT allele suffix absent from the native Emerson TSVs."""
+    return re.sub(r"\*[0-9]+$", "", str(gene).strip())
+
+
 def compare_published_signature(
     published_reference: str | Path,
     reproduced_signature: str | Path,
@@ -64,10 +69,12 @@ def compare_published_signature(
 ) -> dict[str, object]:
     """Compare the published 164-TCR list with the independently reproduced list.
 
-    The identity is deliberately the raw triplet used in the article and source
-    TSVs: V gene, CDR3 amino-acid sequence, and J gene.  No allele, gene-name,
-    or sequence harmonisation is performed, since such a transformation could
-    manufacture agreement that is absent in the original records.
+    The native source TSVs encode the raw triplet V gene, CDR3 amino-acid
+    sequence, and J gene, without the optional IMGT allele suffix.  The
+    published spreadsheet sometimes includes that suffix.  Accordingly, the
+    report includes both literal text agreement and agreement after removing
+    only ``*<allele number>`` from the published V and J labels.  It never
+    performs gene-name, sequence, or allele-family harmonisation.
     """
     published_path, reproduced_path, results = (
         Path(published_reference),
@@ -91,20 +98,29 @@ def compare_published_signature(
             "j_gene": published[j_column],
         }
     )
-    published_rows["clonotype_key"] = [
+    published_rows["published_clonotype_key"] = [
         _key(v_gene, cdr3aa, j_gene)
         for v_gene, cdr3aa, j_gene in published_rows.itertuples(index=False, name=None)
     ]
-    published_rows = published_rows.dropna(subset=["clonotype_key"]).drop_duplicates("clonotype_key")
+    published_rows["source_identity_key"] = [
+        _key(_without_allele(v_gene), cdr3aa, _without_allele(j_gene))
+        for v_gene, cdr3aa, j_gene in published_rows.itertuples(index=False, name=None)
+    ]
+    published_rows = published_rows.dropna(subset=["published_clonotype_key", "source_identity_key"])
+    published_rows = published_rows.drop_duplicates("published_clonotype_key")
+    if published_rows["source_identity_key"].duplicated().any():
+        raise ValueError("published table contains duplicate source identities after removing only allele suffixes")
     reproduced = pd.read_csv(reproduced_path, sep="\t")
     required = {"clonotype_key", "v_gene", "cdr3aa", "j_gene"}
     missing = required - set(reproduced.columns)
     if missing:
         raise ValueError(f"{reproduced_path}: missing required columns {sorted(missing)!r}")
     reproduced = reproduced.drop_duplicates("clonotype_key")
+    reproduced["source_identity_key"] = reproduced["clonotype_key"]
+    literal_text_matches = len(set(published_rows["published_clonotype_key"]) & set(reproduced["clonotype_key"]))
     comparison = published_rows.merge(
         reproduced,
-        on="clonotype_key",
+        on="source_identity_key",
         how="outer",
         suffixes=("_published", "_reproduced"),
         indicator=True,
@@ -113,17 +129,18 @@ def compare_published_signature(
         {"both": "shared_exact_identity", "left_only": "published_only", "right_only": "reproduced_only"}
     )
     comparison = comparison.drop(columns="_merge").sort_values(
-        ["comparison_status", "clonotype_key"], ignore_index=True
+        ["comparison_status", "source_identity_key"], ignore_index=True
     )
     results.mkdir(parents=True)
     comparison.to_csv(results / "emerson_exact_published_vs_reproduced.tsv", sep="\t", index=False)
     manifest = {
         "published_reference": str(published_path),
         "reproduced_signature": str(reproduced_path),
-        "identity": "raw_v_gene + raw_cdr3_amino_acid + raw_j_gene; no harmonisation",
+        "identity": "raw_v_gene + raw_cdr3_amino_acid + raw_j_gene; published labels additionally checked after removal of only *<allele number>",
         "published_n_unique": int(len(published_rows)),
         "reproduced_n_unique": int(len(reproduced)),
-        "n_shared_exact": int(comparison["comparison_status"].eq("shared_exact_identity").sum()),
+        "n_shared_literal_text": int(literal_text_matches),
+        "n_shared_source_identity": int(comparison["comparison_status"].eq("shared_exact_identity").sum()),
         "n_published_only": int(comparison["comparison_status"].eq("published_only").sum()),
         "n_reproduced_only": int(comparison["comparison_status"].eq("reproduced_only").sum()),
     }
