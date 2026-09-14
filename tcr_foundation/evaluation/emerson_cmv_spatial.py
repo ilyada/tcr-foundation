@@ -262,7 +262,7 @@ def _local_label_enrichment(
     anchors = _l2_normalise(np.vstack([embeddings[identity] for identity in anchor_ids]))
     generator = np.random.default_rng(seed)
     observed_values: list[float] = []
-    null_values: list[float] = []
+    null_by_draw: list[np.ndarray] = []
     for draw_index, draw in enumerate(matched_draws):
         controls = _l2_normalise(np.vstack([embeddings[identity] for identity in draw]))
         nearest = _nearest_indices(np.vstack((anchors, controls)), neighbours)
@@ -272,11 +272,15 @@ def _local_label_enrichment(
         choose_anchor = generator.integers(0, 2, size=(permutations_per_draw, len(anchor_ids)), endpoint=False).astype(bool)
         masks = np.concatenate((choose_anchor, ~choose_anchor), axis=1)
         neighbour_fractions = masks[:, nearest].mean(axis=2)
-        null_values.extend((neighbour_fractions * masks).sum(axis=1).astype(float).tolist())
+        null_by_draw.append((neighbour_fractions * masks).sum(axis=1).astype(float))
         if (draw_index + 1) % 100 == 0 or draw_index + 1 == len(matched_draws):
             print(f"local label enrichment: {draw_index + 1}/{len(matched_draws)} matched draws", flush=True)
     observed = np.asarray(observed_values)
-    null = np.asarray(null_values)
+    # Each null replicate is averaged over every independently sampled matched
+    # background set, exactly as the observed statistic is.  Pooling individual
+    # draw/permutation values would underestimate the null variance and yield
+    # an anticonservative empirical probability.
+    null = np.vstack(null_by_draw).mean(axis=0)
     mean_observed = float(observed.mean())
     summary = pd.DataFrame(
         [{
