@@ -377,7 +377,7 @@ def run_local_enrichment(
     draws: int = 500,
     local_neighbours: int = 10,
     graph_neighbours: int = 3,
-    permutations_per_draw: int = 100,
+    permutations_per_draw: int = 500,
     minimum_pool: int = 20,
     prevalence_tolerances: tuple[int, ...] = (0, 1, 2, 5, 10, 20, 50),
     seed: int = 0,
@@ -642,7 +642,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--keck-clouds-dir", help="Keck raw-cloud directory, required for --local-classifier-results")
     parser.add_argument("--local-neighbours", type=int, default=10, help="combined anchor/background neighbourhood size for the local-label test")
     parser.add_argument("--graph-neighbours", type=int, default=3, help="mutual-kNN graph degree used to freeze local components")
-    parser.add_argument("--within-pair-permutations", type=int, default=100, help="matched-pair label permutations per control draw")
+    parser.add_argument("--within-pair-permutations", type=int, default=500, help="matched-pair label permutations, each averaged over every control draw")
     args = parser.parse_args(argv)
     if args.local_enrichment_results or args.local_classifier_results or args.local_enrichment_input:
         if args.local_enrichment_results:
