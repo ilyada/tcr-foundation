@@ -176,6 +176,9 @@ def _load_embeddings(files: list[Path], wanted: set[str], embedding_columns: lis
                 found[identity] = np.asarray(embedding, dtype=np.float32)
         if index % 25 == 0 or index == len(files):
             print(f"embeddings: {index}/{len(files)} clouds, {len(found):,}/{len(wanted):,} identities", flush=True)
+        if len(found) == len(wanted):
+            print(f"embeddings: complete after {index}/{len(files)} clouds", flush=True)
+            break
     missing = wanted - set(found)
     if missing:
         raise RuntimeError(f"{len(missing)} selected identities were absent while reading embeddings")
