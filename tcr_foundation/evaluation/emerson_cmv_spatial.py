@@ -228,11 +228,18 @@ def _mean_label_enrichment(
         anchor_mask[:n_identities] = True
     if anchor_mask.dtype != bool or anchor_mask.shape != (2 * n_identities,) or int(anchor_mask.sum()) != n_identities:
         raise ValueError("anchor_mask must select exactly one group of the matched pairs")
-    similarity = combined @ combined.T
-    np.fill_diagonal(similarity, -np.inf)
-    nearest = np.argpartition(similarity, kth=similarity.shape[1] - neighbours, axis=1)[:, -neighbours:]
+    nearest = _nearest_indices(combined, neighbours)
     fractions = anchor_mask[nearest].mean(axis=1)
     return float(fractions[anchor_mask].mean())
+
+
+def _nearest_indices(embeddings: np.ndarray, neighbours: int) -> np.ndarray:
+    """Return indices of the nearest cosine neighbours after excluding self."""
+    if not 1 <= neighbours < len(embeddings):
+        raise ValueError("neighbours must be positive and smaller than the embedding set")
+    similarity = embeddings @ embeddings.T
+    np.fill_diagonal(similarity, -np.inf)
+    return np.argpartition(similarity, kth=similarity.shape[1] - neighbours, axis=1)[:, -neighbours:]
 
 
 def _local_label_enrichment(
@@ -258,11 +265,14 @@ def _local_label_enrichment(
     null_values: list[float] = []
     for draw_index, draw in enumerate(matched_draws):
         controls = _l2_normalise(np.vstack([embeddings[identity] for identity in draw]))
-        observed_values.append(_mean_label_enrichment(anchors, controls, neighbours=neighbours))
-        for _ in range(permutations_per_draw):
-            choose_anchor = generator.integers(0, 2, size=len(anchor_ids), endpoint=False).astype(bool)
-            mask = np.concatenate((choose_anchor, ~choose_anchor))
-            null_values.append(_mean_label_enrichment(anchors, controls, neighbours=neighbours, anchor_mask=mask))
+        nearest = _nearest_indices(np.vstack((anchors, controls)), neighbours)
+        observed_mask = np.zeros(2 * len(anchor_ids), dtype=bool)
+        observed_mask[:len(anchor_ids)] = True
+        observed_values.append(float(observed_mask[nearest].mean(axis=1)[observed_mask].mean()))
+        choose_anchor = generator.integers(0, 2, size=(permutations_per_draw, len(anchor_ids)), endpoint=False).astype(bool)
+        masks = np.concatenate((choose_anchor, ~choose_anchor), axis=1)
+        neighbour_fractions = masks[:, nearest].mean(axis=2)
+        null_values.extend((neighbour_fractions * masks).sum(axis=1).astype(float).tolist())
         if (draw_index + 1) % 100 == 0 or draw_index + 1 == len(matched_draws):
             print(f"local label enrichment: {draw_index + 1}/{len(matched_draws)} matched draws", flush=True)
     observed = np.asarray(observed_values)
