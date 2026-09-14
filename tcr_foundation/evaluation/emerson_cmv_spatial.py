@@ -497,12 +497,13 @@ def _dual_roc_figure(frame: pd.DataFrame, path: Path, title: str) -> dict[str, f
 
 def run_local_neighbour_classifier(
     local_enrichment_dir: str | Path,
-    clouds_dir: str | Path,
+    p_clouds_dir: str | Path,
+    keck_clouds_dir: str | Path,
     source_dir: str | Path,
     results_dir: str | Path,
 ) -> dict[str, object]:
     """Fit P beta-binomial models for frozen exact-or-local cloud signatures and test Keck."""
-    local_dir, clouds, source, output = Path(local_enrichment_dir), Path(clouds_dir), Path(source_dir), Path(results_dir)
+    local_dir, p_clouds, keck_clouds, source, output = Path(local_enrichment_dir), Path(p_clouds_dir), Path(keck_clouds_dir), Path(source_dir), Path(results_dir)
     component_path = local_dir / "emerson_cmv_local_components.tsv"
     if not component_path.exists():
         raise FileNotFoundError(f"{component_path}: run local enrichment before classification")
@@ -514,8 +515,8 @@ def run_local_neighbour_classifier(
         raise ValueError(f"{component_path}: missing required columns {sorted(missing)!r}")
     exact_identities = set(components["identity"])
     medoids = components.loc[components["is_medoid"] & components["component_size"].gt(1)].copy()
-    p_files, p_labels = _labelled_clouds(clouds, source, "P*.parquet")
-    keck_files, keck_labels = _labelled_clouds(clouds, source, "Keck*.parquet")
+    p_files, p_labels = _labelled_clouds(p_clouds, source, "P*.parquet")
+    keck_files, keck_labels = _labelled_clouds(keck_clouds, source, "Keck*.parquet")
     embedding_columns = _embedding_columns(p_files[0])
     medoid_vectors = _load_embeddings(p_files, set(medoids["identity"]), embedding_columns) if len(medoids) else {}
     medoid_embeddings = _l2_normalise(np.vstack([medoid_vectors[identity] for identity in medoids["identity"]])) if len(medoids) else np.empty((0, len(embedding_columns)), dtype=np.float32)
@@ -535,7 +536,8 @@ def run_local_neighbour_classifier(
     keck_counts.to_csv(output / "emerson_cmv_local_keck_scores.tsv", sep="\t", index=False)
     manifest = {
         "local_enrichment_dir": str(local_dir),
-        "clouds_dir": str(clouds),
+        "p_clouds_dir": str(p_clouds),
+        "keck_clouds_dir": str(keck_clouds),
         "source_dir": str(source),
         "signature": "each cloud identity is counted once if it is an exact published anchor or lies within any frozen non-singleton component medoid radius",
         "n_exact_anchors": len(exact_identities),
@@ -633,6 +635,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--local-enrichment-results", help="new directory for the matched ten-NN label-enrichment test and frozen local components")
     parser.add_argument("--local-classifier-results", help="new directory for the frozen exact-or-local beta-binomial classifier results")
     parser.add_argument("--local-enrichment-input", help="completed local-enrichment result directory, required for --local-classifier-results")
+    parser.add_argument("--keck-clouds-dir", help="Keck raw-cloud directory, required for --local-classifier-results")
     parser.add_argument("--local-neighbours", type=int, default=10, help="combined anchor/background neighbourhood size for the local-label test")
     parser.add_argument("--graph-neighbours", type=int, default=3, help="mutual-kNN graph degree used to freeze local components")
     parser.add_argument("--within-pair-permutations", type=int, default=100, help="matched-pair label permutations per control draw")
@@ -657,9 +660,9 @@ def main(argv: list[str] | None = None) -> None:
                 seed=args.seed,
             )
             return
-        if not all((args.local_classifier_results, args.local_enrichment_input, args.clouds_dir, args.emerson_tsv)):
-            parser.error("--local-classifier-results, --local-enrichment-input, --clouds-dir, and --emerson-tsv are required together")
-        run_local_neighbour_classifier(args.local_enrichment_input, args.clouds_dir, args.emerson_tsv, args.local_classifier_results)
+        if not all((args.local_classifier_results, args.local_enrichment_input, args.clouds_dir, args.keck_clouds_dir, args.emerson_tsv)):
+            parser.error("--local-classifier-results, --local-enrichment-input, --clouds-dir, --keck-clouds-dir, and --emerson-tsv are required together")
+        run_local_neighbour_classifier(args.local_enrichment_input, args.clouds_dir, args.keck_clouds_dir, args.emerson_tsv, args.local_classifier_results)
         return
     run_spatial_test(args.published_reference, args.clouds_dir, args.emerson_tsv, args.results, draws=args.draws, neighbours=tuple(args.neighbours), minimum_pool=args.minimum_pool, prevalence_tolerances=tuple(args.prevalence_tolerances), seed=args.seed)
 
