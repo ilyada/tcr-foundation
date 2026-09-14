@@ -165,7 +165,7 @@ def compare_published_signature(
     ]
     published_rows["source_identity_key"] = [
         _key(_without_allele(v_gene), cdr3aa, _without_allele(j_gene))
-        for v_gene, cdr3aa, j_gene in published_rows.itertuples(index=False, name=None)
+        for v_gene, cdr3aa, j_gene in published_rows[["v_gene", "cdr3aa", "j_gene"]].itertuples(index=False, name=None)
     ]
     published_rows = published_rows.dropna(subset=["published_clonotype_key", "source_identity_key"])
     published_rows = published_rows.drop_duplicates("published_clonotype_key")
