@@ -43,6 +43,97 @@ KEY_SEPARATOR = "\x1f"
 _TSV_COLUMNS = ["frame_type", "amino_acid", "v_gene", "j_gene"]
 
 
+def _published_column(frame: pd.DataFrame, aliases: set[str], label: str) -> str:
+    """Resolve one required published-table column without guessing its values."""
+    normalised = {
+        re.sub(r"[^a-z0-9]+", "", str(column).lower()): str(column)
+        for column in frame.columns
+    }
+    for alias in aliases:
+        if alias in normalised:
+            return normalised[alias]
+    raise ValueError(
+        f"published table has no {label} column; observed columns: {list(frame.columns)!r}"
+    )
+
+
+def compare_published_signature(
+    published_reference: str | Path,
+    reproduced_signature: str | Path,
+    results_dir: str | Path,
+) -> dict[str, object]:
+    """Compare the published 164-TCR list with the independently reproduced list.
+
+    The identity is deliberately the raw triplet used in the article and source
+    TSVs: V gene, CDR3 amino-acid sequence, and J gene.  No allele, gene-name,
+    or sequence harmonisation is performed, since such a transformation could
+    manufacture agreement that is absent in the original records.
+    """
+    published_path, reproduced_path, results = (
+        Path(published_reference),
+        Path(reproduced_signature),
+        Path(results_dir),
+    )
+    if results.exists():
+        raise FileExistsError(f"results directory must be new: {results}")
+    published = pd.read_excel(published_path)
+    v_column = _published_column(published, {"vgene", "v", "vsegment"}, "V-gene")
+    cdr3_column = _published_column(
+        published,
+        {"cdr3", "cdr3aa", "aminoacid", "aminoacidsequence", "cdr3aminoacid"},
+        "CDR3 amino-acid",
+    )
+    j_column = _published_column(published, {"jgene", "j", "jsegment"}, "J-gene")
+    published_rows = pd.DataFrame(
+        {
+            "v_gene": published[v_column],
+            "cdr3aa": published[cdr3_column],
+            "j_gene": published[j_column],
+        }
+    )
+    published_rows["clonotype_key"] = [
+        _key(v_gene, cdr3aa, j_gene)
+        for v_gene, cdr3aa, j_gene in published_rows.itertuples(index=False, name=None)
+    ]
+    published_rows = published_rows.dropna(subset=["clonotype_key"]).drop_duplicates("clonotype_key")
+    reproduced = pd.read_csv(reproduced_path, sep="\t")
+    required = {"clonotype_key", "v_gene", "cdr3aa", "j_gene"}
+    missing = required - set(reproduced.columns)
+    if missing:
+        raise ValueError(f"{reproduced_path}: missing required columns {sorted(missing)!r}")
+    reproduced = reproduced.drop_duplicates("clonotype_key")
+    comparison = published_rows.merge(
+        reproduced,
+        on="clonotype_key",
+        how="outer",
+        suffixes=("_published", "_reproduced"),
+        indicator=True,
+    )
+    comparison["comparison_status"] = comparison["_merge"].map(
+        {"both": "shared_exact_identity", "left_only": "published_only", "right_only": "reproduced_only"}
+    )
+    comparison = comparison.drop(columns="_merge").sort_values(
+        ["comparison_status", "clonotype_key"], ignore_index=True
+    )
+    results.mkdir(parents=True)
+    comparison.to_csv(results / "emerson_exact_published_vs_reproduced.tsv", sep="\t", index=False)
+    manifest = {
+        "published_reference": str(published_path),
+        "reproduced_signature": str(reproduced_path),
+        "identity": "raw_v_gene + raw_cdr3_amino_acid + raw_j_gene; no harmonisation",
+        "published_n_unique": int(len(published_rows)),
+        "reproduced_n_unique": int(len(reproduced)),
+        "n_shared_exact": int(comparison["comparison_status"].eq("shared_exact_identity").sum()),
+        "n_published_only": int(comparison["comparison_status"].eq("published_only").sum()),
+        "n_reproduced_only": int(comparison["comparison_status"].eq("reproduced_only").sum()),
+    }
+    (results / "emerson_exact_published_comparison_manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    print(json.dumps(manifest, indent=2), flush=True)
+    return manifest
+
+
 def _sample_status(path: Path) -> str:
     """Extract one CMV call from the first source TSV row."""
     with path.open("r", encoding="utf-8", newline="") as handle:
@@ -275,12 +366,24 @@ def run_exact_reproduction(source_dir: str | Path, tmp_dir: str | Path, results_
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--emerson-tsv", required=True, help="directory containing native P*.tsv and Keck*.tsv files")
-    parser.add_argument("--tmp", required=True, help="new rebuildable temporary output directory")
-    parser.add_argument("--results", required=True, help="new compact human-facing results directory")
+    parser.add_argument("--emerson-tsv", help="directory containing native P*.tsv and Keck*.tsv files")
+    parser.add_argument("--tmp", help="new rebuildable temporary output directory")
+    parser.add_argument("--results", help="new compact human-facing results directory")
     parser.add_argument("--p-threshold", type=float, default=1e-4, help="one-sided Fisher threshold from the published procedure")
     parser.add_argument("--bloom-bits", type=int, default=1 << 33, help="Bloom-filter size in bits for the first source pass")
+    parser.add_argument("--published-reference", help="published Supplementary Table 2 XLSX for an exact identity comparison")
+    parser.add_argument("--reproduced-signature", help="TSV produced by this module containing the P-derived diagnostic clonotypes")
+    parser.add_argument("--comparison-results", help="new directory for compact published-versus-reproduced comparison files")
     args = parser.parse_args(argv)
+    comparison_arguments = (args.published_reference, args.reproduced_signature, args.comparison_results)
+    if any(comparison_arguments):
+        if not all(comparison_arguments):
+            parser.error("--published-reference, --reproduced-signature, and --comparison-results must be supplied together")
+        compare_published_signature(args.published_reference, args.reproduced_signature, args.comparison_results)
+        return
+    reproduction_arguments = (args.emerson_tsv, args.tmp, args.results)
+    if not all(reproduction_arguments):
+        parser.error("--emerson-tsv, --tmp, and --results are required for exact-classifier reproduction")
     run_exact_reproduction(args.emerson_tsv, args.tmp, args.results, p_threshold=args.p_threshold, bloom_bits=args.bloom_bits)
 
 
