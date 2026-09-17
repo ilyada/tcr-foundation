@@ -327,7 +327,9 @@ def _fisher_statistics(counts: dict[str, list[int]], class_sizes: dict[str, int]
     for key, positive, negative, total, p_value, is_selected in zip(keys[selected], positives[selected], negatives[selected], totals[selected], p_values[selected], selected[selected], strict=True):
         v_gene, cdr3aa, j_gene = key.split(KEY_SEPARATOR, 2)
         rows.append({"clonotype_key": key, "v_gene": v_gene, "cdr3aa": cdr3aa, "j_gene": j_gene, "p_positive_carriers": int(positive), "p_negative_carriers": int(negative), "p_total_carriers": int(total), "p_positive_prevalence": float(positive / n_positive), "p_negative_prevalence": float(negative / n_negative), "p_fisher_one_sided": float(p_value), "selected": bool(is_selected)})
-    return pd.DataFrame(rows).sort_values(["p_fisher_one_sided", "p_positive_carriers", "clonotype_key"], ascending=[True, False, True], ignore_index=True)
+    columns = ["clonotype_key", "v_gene", "cdr3aa", "j_gene", "p_positive_carriers", "p_negative_carriers", "p_total_carriers", "p_positive_prevalence", "p_negative_prevalence", "p_fisher_one_sided", "selected"]
+    frame = pd.DataFrame(rows, columns=columns)
+    return frame.sort_values(["p_fisher_one_sided", "p_positive_carriers", "clonotype_key"], ascending=[True, False, True], ignore_index=True) if not frame.empty else frame
 
 
 def _neg_log_likelihood(log_params: np.ndarray, n_values: np.ndarray, k_values: np.ndarray) -> float:
