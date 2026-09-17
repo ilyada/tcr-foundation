@@ -239,6 +239,20 @@ def _embed_prepared_clonotypes(df, model, tokenizer, jcfg, chain, device, batch_
     return cloud, len(cloud)
 
 
+def _exclude_invalid_template_rows(events):
+    """Drop rows without a positive finite template count and report their number.
+
+    Adaptive exports occasionally retain zero or non-finite template-count rows.
+    They have no defined abundance and cannot contribute to a raw or OAR-weighted
+    repertoire cloud.  The filtering is applied identically before both paths.
+    """
+    templates = pd.to_numeric(events["templates"], errors="coerce")
+    valid = np.isfinite(templates) & templates.gt(0)
+    filtered = events.loc[valid].copy()
+    filtered["templates"] = templates.loc[valid].to_numpy(dtype=float)
+    return filtered, int((~valid).sum())
+
+
 def process_file(path, model, tokenizer, jcfg, chain, device, batch_size):
     """Build a raw-weight cloud from one legacy clonotype file.
 
@@ -260,10 +274,15 @@ def process_file(path, model, tokenizer, jcfg, chain, device, batch_size):
         events = events.loc[events["chain"].astype(str) == chain_label].copy()
         if events.empty:
             raise EmptyRepertoire(f"no {chain_label} events")
+        n_event_rows = len(events)
+        events, n_invalid_templates = _exclude_invalid_template_rows(events)
+        if events.empty:
+            raise EmptyRepertoire(f"no {chain_label} events with a positive finite template count")
         _, prepared = process_patient(events, oar=False)
         out, n_res = _embed_prepared_clonotypes(prepared, model, tokenizer, jcfg, chain, device, batch_size, oar=False)
         return out, {
-            "n_event_rows": len(events),
+            "n_event_rows": n_event_rows,
+            "n_invalid_template_rows_excluded": n_invalid_templates,
             "n_nonproductive_rows": int(events["frame_type"].astype(str).isin(("out", "stop")).sum()),
             "n_productive_raw": len(prepared),
             "n_productive_embedded": n_res,
@@ -304,10 +323,15 @@ def process_oar_file(path, model, tokenizer, jcfg, chain, device, batch_size, *,
     events = events.loc[events["chain"].astype(str) == chain_label].copy()
     if events.empty:
         raise ValueError(f"{source.name}: no {chain_label} events")
+    n_event_rows = len(events)
+    events, n_invalid_templates = _exclude_invalid_template_rows(events)
+    if events.empty:
+        raise ValueError(f"{source.name}: no {chain_label} events with a positive finite template count")
     factors, productive = process_patient(events, min_unique_clonotypes=min_unique_clonotypes)
     out, n_embedded = _embed_prepared_clonotypes(productive, model, tokenizer, jcfg, chain, device, batch_size, oar=True)
     return out, {
-        "n_event_rows": len(events),
+        "n_event_rows": n_event_rows,
+        "n_invalid_template_rows_excluded": n_invalid_templates,
         "n_nonproductive_rows": int(events["frame_type"].astype(str).isin(("out", "stop")).sum()),
         "n_oar_factors": len(factors),
         "n_oar_calibrated": int((factors["oar_source"] == "patient_nonproductive").sum()),
