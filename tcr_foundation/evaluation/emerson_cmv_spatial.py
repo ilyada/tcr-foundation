@@ -275,7 +275,7 @@ def _local_label_enrichment(
         choose_anchor = generator.integers(0, 2, size=(permutations_per_draw, len(anchor_ids)), endpoint=False).astype(bool)
         masks = np.concatenate((choose_anchor, ~choose_anchor), axis=1)
         neighbour_fractions = masks[:, nearest].mean(axis=2)
-        null_by_draw.append((neighbour_fractions * masks).sum(axis=1).astype(float))
+        null_by_draw.append(((neighbour_fractions * masks).sum(axis=1) / len(anchor_ids)).astype(float))
         if (draw_index + 1) % 100 == 0 or draw_index + 1 == len(matched_draws):
             print(f"local label enrichment: {draw_index + 1}/{len(matched_draws)} matched draws", flush=True)
     observed = np.asarray(observed_values)
@@ -630,7 +630,7 @@ def run_spatial_test(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--published-reference", required=True)
+    parser.add_argument("--published-reference")
     parser.add_argument("--clouds-dir", required=True)
     parser.add_argument("--emerson-tsv", required=True, help="source directory containing P*.tsv")
     parser.add_argument("--results", help="new directory for compact final artefacts in the original distance-null mode")
@@ -671,8 +671,8 @@ def main(argv: list[str] | None = None) -> None:
             parser.error("--local-classifier-results, --local-enrichment-input, --clouds-dir, --keck-clouds-dir, and --emerson-tsv are required together")
         run_local_neighbour_classifier(args.local_enrichment_input, args.clouds_dir, args.keck_clouds_dir, args.emerson_tsv, args.local_classifier_results)
         return
-    if not args.results:
-        parser.error("--results is required unless a local-enrichment or local-classifier mode is selected")
+    if not all((args.published_reference, args.clouds_dir, args.emerson_tsv, args.results)):
+        parser.error("--published-reference, --clouds-dir, --emerson-tsv, and --results are required in the original distance-null mode")
     run_spatial_test(args.published_reference, args.clouds_dir, args.emerson_tsv, args.results, draws=args.draws, neighbours=tuple(args.neighbours), minimum_pool=args.minimum_pool, prevalence_tolerances=tuple(args.prevalence_tolerances), seed=args.seed)
 
 
