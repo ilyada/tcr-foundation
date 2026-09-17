@@ -442,6 +442,135 @@ def run_exact_reproduction(source_dir: str | Path, tmp_dir: str | Path, results_
     return manifest
 
 
+def _stratified_p_subset(paths: list[Path], labels: dict[str, int], subset_size: int, seed: int) -> list[Path]:
+    """Select one deterministic CMV-stratified P discovery subset."""
+    if subset_size < 2 or subset_size > len(paths):
+        raise ValueError(f"subset_size must lie in [2, {len(paths)}]")
+    grouped = {label: [path for path in paths if labels[path.stem] == label] for label in (0, 1)}
+    if not grouped[0] or not grouped[1]:
+        raise ValueError("P discovery cohort must contain both CMV classes")
+    n_positive = int(round(subset_size * len(grouped[1]) / len(paths)))
+    n_positive = min(max(n_positive, 1), len(grouped[1]))
+    n_negative = subset_size - n_positive
+    if n_negative < 1 or n_negative > len(grouped[0]):
+        raise ValueError("subset_size cannot retain both CMV classes at the observed P prevalence")
+    rng = np.random.default_rng(seed)
+    chosen = [*rng.choice(grouped[0], size=n_negative, replace=False), *rng.choice(grouped[1], size=n_positive, replace=False)]
+    return sorted(chosen)
+
+
+def run_exact_learning_curve_draw(
+    source_dir: str | Path,
+    output_path: str | Path,
+    *,
+    subset_size: int,
+    repeat_index: int,
+    seed: int = 0,
+    p_threshold: float = 1e-4,
+    bloom_bits: int = 1 << 33,
+) -> dict[str, object]:
+    """Fit one P-only exact discovery draw and score the fixed external Keck cohort.
+
+    The JSON output is deliberately compact and rebuildable: it records the
+    deterministic subset hash and metrics, but not a large candidate table.
+    """
+    source, output = Path(source_dir), Path(output_path)
+    if output.exists():
+        raise FileExistsError(f"draw output must be new: {output}")
+    if repeat_index < 0:
+        raise ValueError("repeat_index must be non-negative")
+    if not 0 < p_threshold < 1:
+        raise ValueError("p_threshold must be between zero and one")
+    p_meta, keck_meta = _metadata(source, "P*.tsv"), _metadata(source, "Keck*.tsv")
+    p_labels = {row.sample: int(row.cmv_status == "positive") for row in p_meta.itertuples() if row.cmv_status in {"positive", "negative"}}
+    keck_labels = {row.sample: int(row.cmv_status == "positive") for row in keck_meta.itertuples() if row.cmv_status in {"positive", "negative"}}
+    p_paths = [path for path in sorted(source.glob("P*.tsv")) if path.stem in p_labels]
+    keck_paths = [path for path in sorted(source.glob("Keck*.tsv")) if path.stem in keck_labels]
+    draw_seed = int(np.random.SeedSequence((seed, subset_size, repeat_index)).generate_state(1)[0])
+    selected_paths = _stratified_p_subset(p_paths, p_labels, subset_size, draw_seed)
+    selected_labels = {path.stem: p_labels[path.stem] for path in selected_paths}
+    public = _public_gate(selected_paths, bloom_bits=bloom_bits)
+    counts, class_sizes, _ = _count_candidates(selected_paths, selected_labels, public)
+    selected = _fisher_statistics(counts, class_sizes, p_threshold=p_threshold)
+    diagnostic = set(selected["clonotype_key"])
+    p_counts = _signature_counts(selected_paths, selected_labels, diagnostic)
+    keck_counts = _signature_counts(keck_paths, keck_labels, diagnostic)
+    if diagnostic:
+        negative = _fit_beta_binomial(p_counts.loc[p_counts["cmv_label"].eq(0), "n_unique_productive"].to_numpy(float), p_counts.loc[p_counts["cmv_label"].eq(0), "k_diagnostic_present"].to_numpy(float))
+        positive = _fit_beta_binomial(p_counts.loc[p_counts["cmv_label"].eq(1), "n_unique_productive"].to_numpy(float), p_counts.loc[p_counts["cmv_label"].eq(1), "k_diagnostic_present"].to_numpy(float))
+        p_score = _posterior_probability(p_counts["n_unique_productive"].to_numpy(float), p_counts["k_diagnostic_present"].to_numpy(float), negative, positive)
+        keck_score = _posterior_probability(keck_counts["n_unique_productive"].to_numpy(float), keck_counts["k_diagnostic_present"].to_numpy(float), negative, positive)
+        model_status = "fitted"
+    else:
+        negative, positive = None, None
+        p_score = np.full(len(p_counts), 0.5)
+        keck_score = np.full(len(keck_counts), 0.5)
+        model_status = "no_diagnostic_clonotypes"
+    subset_names = [path.stem for path in selected_paths]
+    manifest = {
+        "source_dir": str(source),
+        "method": "P-only stratified subset; exact raw V+CDR3aa+J Fisher discovery; frozen beta-binomial score on unchanged Keck",
+        "subset_size": len(selected_paths),
+        "repeat_index": repeat_index,
+        "base_seed": seed,
+        "draw_seed": draw_seed,
+        "subset_sample_sha256": hashlib.sha256("\n".join(subset_names).encode("utf-8")).hexdigest(),
+        "n_p_positive": class_sizes[1],
+        "n_p_negative": class_sizes[0],
+        "p_threshold": p_threshold,
+        "bloom_bits": bloom_bits,
+        "n_public_tested": len(counts),
+        "n_diagnostic": len(diagnostic),
+        "model_status": model_status,
+        "p_apparent_auroc": float(roc_auc_score(p_counts["cmv_label"], p_score)),
+        "keck_external_auroc": float(roc_auc_score(keck_counts["cmv_label"], keck_score)),
+        "beta_binomial_negative": negative,
+        "beta_binomial_positive": positive,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(manifest, indent=2), flush=True)
+    return manifest
+
+
+def aggregate_exact_learning_curve(draw_dir: str | Path, results_dir: str | Path, *, expected_draws: int | None = None) -> pd.DataFrame:
+    """Aggregate completed draw manifests into final Keck learning-curve artefacts."""
+    draws, results = Path(draw_dir), Path(results_dir)
+    if results.exists():
+        raise FileExistsError(f"results directory must be new: {results}")
+    manifests = sorted(draws.glob("*.json"))
+    if expected_draws is not None and len(manifests) != expected_draws:
+        raise RuntimeError(f"expected {expected_draws} draw manifests, found {len(manifests)}")
+    if not manifests:
+        raise FileNotFoundError(f"no draw manifests found in {draws}")
+    frame = pd.DataFrame([json.loads(path.read_text(encoding="utf-8")) for path in manifests])
+    if frame.duplicated(["subset_size", "repeat_index"]).any():
+        raise ValueError("duplicate learning-curve draw identifiers")
+    summary = frame.groupby("subset_size", as_index=False).agg(
+        n_draws=("keck_external_auroc", "size"),
+        keck_auroc_mean=("keck_external_auroc", "mean"),
+        keck_auroc_median=("keck_external_auroc", "median"),
+        keck_auroc_min=("keck_external_auroc", "min"),
+        keck_auroc_max=("keck_external_auroc", "max"),
+        diagnostic_median=("n_diagnostic", "median"),
+    ).sort_values("subset_size", ignore_index=True)
+    results.mkdir(parents=True)
+    frame.sort_values(["subset_size", "repeat_index"]).to_csv(results / "emerson_exact_learning_curve_draws.tsv", sep="\t", index=False)
+    summary.to_csv(results / "emerson_exact_learning_curve_summary.tsv", sep="\t", index=False)
+    figure, axis = plt.subplots(figsize=(6, 4.5), constrained_layout=True)
+    x = summary["subset_size"].to_numpy(dtype=float)
+    median = summary["keck_auroc_median"].to_numpy(dtype=float)
+    axis.plot(x, median, marker="o", color="#2166ac", linewidth=2, label="Keck AUROC median")
+    axis.fill_between(x, summary["keck_auroc_min"], summary["keck_auroc_max"], color="#2166ac", alpha=0.18, label="repeat range")
+    axis.set(xlabel="P discovery donors", ylabel="Keck external AUROC", ylim=(0.45, 1.0), title="Exact-clonotype CMV learning curve")
+    axis.legend(frameon=False, loc="lower right")
+    figure.savefig(results / "emerson_exact_learning_curve_keck_auroc.png", dpi=220)
+    plt.close(figure)
+    manifest = {"draw_dir": str(draws), "expected_draws": expected_draws, "n_draws": len(frame), "procedure": "each draw performs independent P-only exact Fisher discovery and beta-binomial fitting; Keck remains unchanged external validation"}
+    (results / "emerson_exact_learning_curve_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return summary
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--emerson-tsv", help="directory containing native P*.tsv and Keck*.tsv files")
@@ -452,12 +581,30 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--published-reference", help="published Supplementary Table 2 XLSX for an exact identity comparison")
     parser.add_argument("--reproduced-signature", help="TSV produced by this module containing the P-derived diagnostic clonotypes")
     parser.add_argument("--comparison-results", help="new directory for compact published-versus-reproduced comparison files")
+    parser.add_argument("--learning-curve-draw-output", help="new JSON output for one P-subset learning-curve draw")
+    parser.add_argument("--subset-size", type=int, help="number of CMV-labelled P donors in one learning-curve draw")
+    parser.add_argument("--repeat-index", type=int, help="zero-based learning-curve repeat index")
+    parser.add_argument("--learning-curve-draw-dir", help="directory containing completed learning-curve draw JSON files")
+    parser.add_argument("--learning-curve-results", help="new final directory for aggregated learning-curve files")
+    parser.add_argument("--expected-draws", type=int, help="required number of draw JSON files before aggregation")
     args = parser.parse_args(argv)
     comparison_arguments = (args.published_reference, args.reproduced_signature, args.comparison_results)
     if any(comparison_arguments):
         if not all(comparison_arguments):
             parser.error("--published-reference, --reproduced-signature, and --comparison-results must be supplied together")
         compare_published_signature(args.published_reference, args.reproduced_signature, args.comparison_results)
+        return
+    draw_arguments = (args.emerson_tsv, args.learning_curve_draw_output, args.subset_size, args.repeat_index)
+    if any(value is not None for value in draw_arguments):
+        if not all(value is not None for value in draw_arguments):
+            parser.error("--emerson-tsv, --learning-curve-draw-output, --subset-size, and --repeat-index are required together")
+        run_exact_learning_curve_draw(args.emerson_tsv, args.learning_curve_draw_output, subset_size=args.subset_size, repeat_index=args.repeat_index, p_threshold=args.p_threshold, bloom_bits=args.bloom_bits)
+        return
+    aggregate_arguments = (args.learning_curve_draw_dir, args.learning_curve_results)
+    if any(aggregate_arguments):
+        if not all(aggregate_arguments):
+            parser.error("--learning-curve-draw-dir and --learning-curve-results are required together")
+        aggregate_exact_learning_curve(args.learning_curve_draw_dir, args.learning_curve_results, expected_draws=args.expected_draws)
         return
     reproduction_arguments = (args.emerson_tsv, args.tmp, args.results)
     if not all(reproduction_arguments):
